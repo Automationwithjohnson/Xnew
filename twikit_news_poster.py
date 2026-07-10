@@ -41,15 +41,11 @@ CATEGORIES = {
     "Tech": "TECH"
 }
 
-# 38 Sources from old workflow
+# 23 Sources remaining after cleanup
 SOURCES = [
     # --- WIRE / AGGREGATORS (fastest) ---
     {"category": "Breaking", "source": "BBC Africa", "url": "http://feeds.bbci.co.uk/news/world/africa/rss.xml"},
     {"category": "General", "source": "Google News Nigeria", "url": "https://news.google.com/rss/search?q=Nigeria&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "Google News Politics", "url": "https://news.google.com/rss/search?q=Nigeria+politics+government&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Sports", "source": "Google News Eagles", "url": "https://news.google.com/rss/search?q=Super+Eagles+NPFL+Nigeria&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "Google News Naija Ent", "url": "https://news.google.com/rss/search?q=Nollywood+Afrobeats+Nigeria&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "Google News Lagos", "url": "https://news.google.com/rss/search?q=Lagos+Abuja+breaking&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Tech", "source": "Google News NaijaTech", "url": "https://news.google.com/rss/search?q=Nigeria+tech+startup+fintech&hl=en-NG&gl=NG&ceid=NG:en"},
     
     # --- GENERAL NEWS ---
@@ -68,25 +64,14 @@ SOURCES = [
     {"category": "Politics", "source": "The Nation", "url": "https://news.google.com/rss/search?q=site:thenationonlineng.net&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Politics", "source": "Guardian Nigeria", "url": "https://news.google.com/rss/search?q=site:guardian.ng&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Politics", "source": "The Cable", "url": "https://news.google.com/rss/search?q=site:thecable.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "Politics Nigeria", "url": "https://politicsnigeria.com/feed/"},
-    {"category": "Politics", "source": "PaperNG", "url": "https://news.google.com/rss/search?q=site:paperng.com&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Politics", "source": "Nigerian Tribune", "url": "https://news.google.com/rss/search?q=site:tribuneonlineng.com&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Politics", "source": "Daily Report Nigeria", "url": "https://news.google.com/rss/search?q=site:dailyreport.ng&hl=en-NG&gl=NG&ceid=NG:en"},
 
     # --- ENTERTAINMENT / VIRAL ---
     {"category": "Entertainment", "source": "Pulse Nigeria", "url": "https://news.google.com/rss/search?q=site:pulse.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "Linda Ikeji Blog", "url": "https://www.lindaikejisblog.com/feed"},
-    {"category": "Entertainment", "source": "Notjustok", "url": "https://notjustok.com/feed/"},
-    {"category": "Entertainment", "source": "Lailasnews", "url": "https://news.google.com/rss/search?q=site:lailasnews.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "Gistchic", "url": "https://news.google.com/rss/search?q=site:gistchic.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "TheSleak", "url": "https://news.google.com/rss/search?q=site:thesleak.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "Kemi Filani", "url": "https://news.google.com/rss/search?q=site:kemifilani.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Entertainment", "source": "Bella Naija", "url": "https://news.google.com/rss/search?q=site:bellanaija.com&hl=en-NG&gl=NG&ceid=NG:en"},
 
     # --- SPORTS ---
     {"category": "Sports", "source": "Complete Sports", "url": "https://www.completesports.com/feed/"},
-    {"category": "Sports", "source": "Brila FM", "url": "https://www.brila.net/feed/"},
-    {"category": "Sports", "source": "AllNigeriaSoccer", "url": "https://news.google.com/rss/search?q=site:allnigeriasoccer.com&hl=en-NG&gl=NG&ceid=NG:en"},
     {"category": "Sports", "source": "Goal Nigeria", "url": "https://news.google.com/rss/search?q=site:goal.com/en-ng&hl=en-NG&gl=NG&ceid=NG:en"},
 
     # --- TECH ---
@@ -481,8 +466,8 @@ async def main():
                 author = entry.get("author") or entry.get("creator") or entry.get("dc:creator") or ""
                 
                 cleaned_author = clean_text(author)
-                if not cleaned_author:
-                    # Skip the article if we can't find the author
+                if not cleaned_author or cleaned_author.isdigit():
+                    # Skip the article if we can't find a valid non-numeric author
                     continue
                     
                 new_articles.append({
