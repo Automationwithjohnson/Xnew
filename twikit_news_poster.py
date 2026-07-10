@@ -317,6 +317,11 @@ async def process_post(client, db_conn, article, dry_run=False):
     
     # 1. Scrape webpage
     media_url, page_text = scrape_webpage(link)
+    if not media_url:
+        print(f"Skipping article '{title}' because no media image was found.")
+        record_posted(db_conn, link, title)
+        return
+        
     article_text = page_text if len(page_text) > 50 else description
     
     # 2. Get AI tweet text
@@ -331,29 +336,33 @@ async def process_post(client, db_conn, article, dry_run=False):
     formatted_tweet = f"{tweet_text}\n\n{link}"
     print(f"Drafted Tweet:\n{formatted_tweet}")
     
-    # 3. Download media if found
+    # 3. Download media
     temp_file_path = None
-    if media_url:
-        try:
-            print(f"Downloading media: {media_url}")
-            resp = requests.get(media_url, stream=True, timeout=20)
-            if resp.status_code == 200:
-                ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
-                if not ext.startswith("."):
-                    ext = "." + ext
-                if ext == ".jpe":
-                    ext = ".jpg"
-                
-                fd, temp_file_path = tempfile.mkstemp(suffix=ext)
-                os.close(fd)
-                
-                with open(temp_file_path, "wb") as out_file:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        out_file.write(chunk)
-                print(f"Media saved to: {temp_file_path}")
-        except Exception as e:
-            print(f"Media download failed: {e}")
-            temp_file_path = None
+    try:
+        print(f"Downloading media: {media_url}")
+        resp = requests.get(media_url, stream=True, timeout=20)
+        if resp.status_code == 200:
+            ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
+            if not ext.startswith("."):
+                ext = "." + ext
+            if ext == ".jpe":
+                ext = ".jpg"
+            
+            fd, temp_file_path = tempfile.mkstemp(suffix=ext)
+            os.close(fd)
+            
+            with open(temp_file_path, "wb") as out_file:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    out_file.write(chunk)
+            print(f"Media saved to: {temp_file_path}")
+    except Exception as e:
+        print(f"Media download failed: {e}")
+        temp_file_path = None
+        
+    if not temp_file_path or not os.path.exists(temp_file_path):
+        print(f"Skipping article '{title}' because the media image could not be downloaded.")
+        record_posted(db_conn, link, title)
+        return
 
     # 4. Post to Twitter
     if dry_run:
