@@ -5,7 +5,7 @@ import subprocess
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTER_SCRIPT = os.path.join(SCRIPT_DIR, "twikit_news_poster.py")
-INTERVAL_SECONDS = 300  # 5 minutes
+INTERVAL_SECONDS = 900  # 15 minutes
 
 def run_poster():
     print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Triggering news poster run...")

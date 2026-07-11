@@ -536,8 +536,8 @@ async def main():
         db_conn.close()
         return
 
-    # Parse limit from arguments (defaults to 5)
-    limit = 5
+    # Parse limit from arguments (defaults to 4)
+    limit = 4
     for arg in sys.argv:
         if arg.startswith("--limit="):
             try:
@@ -561,11 +561,14 @@ async def main():
             db_conn.close()
             return
         
-    for article in to_process:
+    for idx, article in enumerate(to_process):
         try:
             await process_post(twitter_client, db_conn, article, dry_run=dry_run)
-            if not dry_run:
-                await asyncio.sleep(10)
+            if not dry_run and idx < len(to_process) - 1:
+                import random
+                delay = random.randint(120, 240)
+                print(f"Waiting for {delay / 60:.1f} minutes before posting next story...")
+                await asyncio.sleep(delay)
         except Exception as e:
             print(f"Skipping article due to error: {e}")
             
