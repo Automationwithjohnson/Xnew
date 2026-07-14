@@ -3,6 +3,7 @@ import sys
 import time
 import sqlite3
 import random
+import json
 import asyncio
 import requests
 import re
@@ -142,10 +143,37 @@ Here is the X post:
         return None
 
 async def setup_twitter_client():
+    """Load cookies from standard JSON export and login to X"""
     client = Client("en-US")
-    if not os.path.exists(os.path.join(SCRIPT_DIR, COOKIES_PATH)):
-        raise Exception(f"Cookies file not found at {COOKIES_PATH}")
-    client.load_cookies(os.path.join(SCRIPT_DIR, COOKIES_PATH))
+    
+    cookies_file = os.path.join(SCRIPT_DIR, COOKIES_PATH)
+    if not os.path.exists(cookies_file) or os.path.getsize(cookies_file) < 10:
+        raise Exception(f"Please paste your exported cookies into {cookies_file} first!")
+        
+    with open(cookies_file, "r", encoding="utf-8") as f:
+        cookies_data = json.load(f)
+        
+    if isinstance(cookies_data, list):
+        formatted_cookies = {}
+        for cookie in cookies_data:
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if name and value:
+                formatted_cookies[name] = value
+        cookies_data = formatted_cookies
+        
+        temp_cookies_path = os.path.join(SCRIPT_DIR, "temp_x_cookies_comment.json")
+        with open(temp_cookies_path, "w", encoding="utf-8") as temp_f:
+            json.dump(formatted_cookies, temp_f)
+            
+        client.load_cookies(temp_cookies_path)
+        try:
+            os.remove(temp_cookies_path)
+        except:
+            pass
+    else:
+        client.load_cookies(cookies_file)
+        
     return client
 
 async def run_commenter_batch(test_mode=False):
