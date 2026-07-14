@@ -93,8 +93,7 @@ def scrape_article_text(url):
     return ""
 
 def call_openrouter(x_post_text, article_context=""):
-    max_length = int(os.getenv("MAX_TWEET_LENGTH", "600"))
-    ai_limit = max_length - 60
+    ai_limit = 200  # Enforce strict limit under 250 characters
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
     
@@ -149,7 +148,7 @@ async def setup_twitter_client():
     client.load_cookies(os.path.join(SCRIPT_DIR, COOKIES_PATH))
     return client
 
-async def run_commenter_batch():
+async def run_commenter_batch(test_mode=False):
     db_conn = setup_database()
     
     try:
@@ -167,7 +166,14 @@ async def run_commenter_batch():
     targets = list(TARGET_ACCOUNTS)
     random.shuffle(targets)
 
+    min_replies_needed = 0 if test_mode else MIN_REPLIES
+    successful_replies = 0
+    max_replies_to_post = 3 if test_mode else 9999
+
     for username in targets:
+        if successful_replies >= max_replies_to_post:
+            break
+            
         print(f"\nChecking latest posts from: @{username}")
         try:
             user = await client.get_user_by_screen_name(username)
@@ -177,6 +183,9 @@ async def run_commenter_batch():
             continue
 
         for tweet in tweets:
+            if successful_replies >= max_replies_to_post:
+                break
+
             # 1. Skip if it is our own tweet or we already processed it
             if tweet.user.id == my_id or is_already_processed(db_conn, tweet.id):
                 continue
@@ -187,8 +196,8 @@ async def run_commenter_batch():
 
             # 3. Check for minimum replies to target active discussions
             reply_count = getattr(tweet, "reply_count", 0) or 0
-            if reply_count < MIN_REPLIES:
-                print(f"Skipping tweet {tweet.id} (replies: {reply_count} < {MIN_REPLIES})")
+            if reply_count < min_replies_needed:
+                print(f"Skipping tweet {tweet.id} (replies: {reply_count} < {min_replies_needed})")
                 continue
 
             print(f"\nTarget post matches! (ID: {tweet.id}, Author: @{tweet.user.screen_name}, Replies: {reply_count})")
@@ -215,8 +224,8 @@ async def run_commenter_batch():
             except Exception as e:
                 print(f"Failed to like tweet: {e}")
 
-            # Wait a few seconds between Like and Comment to mimic human behavior
-            await asyncio.sleep(random.randint(5, 15))
+            # Wait between Like and Comment (1s in test, 5-15s in prod)
+            await asyncio.sleep(1 if test_mode else random.randint(5, 15))
 
             # 5. Generate reply content
             comment_content = call_openrouter(tweet.text, article_context)
@@ -232,38 +241,56 @@ async def run_commenter_batch():
                 await client.create_tweet(text=comment_content, reply_to=tweet.id)
                 print("Comment posted successfully!")
                 record_processed(db_conn, tweet.id)
+                successful_replies += 1
             except Exception as e:
                 print(f"Failed to post comment: {e}")
                 # Save to database to prevent infinite retries
                 record_processed(db_conn, tweet.id)
 
-            # Wait a random delay (1 to 3 minutes) before moving to next match to prevent rate limiting
-            delay = random.randint(60, 180)
-            print(f"Sleeping for {delay} seconds before checking other accounts...")
-            await asyncio.sleep(delay)
+            # Wait before moving to next match (0s in test, 3-5 minutes in prod)
+            if successful_replies < max_replies_to_post:
+                delay = 1 if test_mode else random.randint(180, 300)
+                print(f"Sleeping for {delay} seconds before checking other accounts...")
+                await asyncio.sleep(delay)
 
     db_conn.close()
 
 async def main():
+    test_mode = "--test" in sys.argv
+    
     print("==================================================")
     print("      X AUTO LIKE & COMMENT BOT STARTING...       ")
-    print(f"   Interval: Every {LOOP_INTERVAL_MINUTES} minutes")
-    print(f"   Target Threshold: {MIN_REPLIES}+ replies minimum")
+    if test_mode:
+        print("   MODE: TEST MODE (3 replies only, zero delays) ")
+    else:
+        print(f"   Interval: Every {LOOP_INTERVAL_MINUTES} minutes")
+        print(f"   Target Threshold: {MIN_REPLIES}+ replies minimum")
+        print(f"   Production Delay: Random 3-5 minutes between posts")
     print("   Press Ctrl+C to terminate the loop")
     print("==================================================")
     
-    while True:
+    if test_mode:
         try:
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running auto like & comment batch...")
-            await run_commenter_batch()
+            print("\nRunning auto like & comment test batch...")
+            await run_commenter_batch(test_mode=True)
+            print("\nTest completed successfully!")
         except Exception as e:
-            print(f"Error during execution batch: {e}")
-            
-        print(f"\nSleeping for {LOOP_INTERVAL_MINUTES} minutes...")
-        await asyncio.sleep(LOOP_INTERVAL_MINUTES * 60)
+            print(f"Error during test execution: {e}")
+    else:
+        while True:
+            try:
+                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running auto like & comment batch...")
+                await run_commenter_batch(test_mode=False)
+            except Exception as e:
+                print(f"Error during execution batch: {e}")
+                
+            print(f"\nSleeping for {LOOP_INTERVAL_MINUTES} minutes...")
+            await asyncio.sleep(LOOP_INTERVAL_MINUTES * 60)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nAuto-commenter stopped. Goodbye!")
+
+
