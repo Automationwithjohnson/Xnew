@@ -181,10 +181,9 @@ async def run_commenter_batch(test_mode=False):
     
     try:
         client = await setup_twitter_client()
-        user_info = await client.user()
-        my_id = user_info.id
-        my_username = user_info.screen_name
-        print(f"Logged in as @{my_username} (ID: {my_id})")
+        my_username = os.getenv("MY_USERNAME", "AlayeCodes")
+        my_id = os.getenv("MY_ID", "2025200557")
+        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
     except Exception as e:
         print(f"Twitter login failed: {e}")
         db_conn.close()
