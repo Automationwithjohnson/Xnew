@@ -7,6 +7,7 @@ import json
 import asyncio
 import requests
 import re
+from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from twikit import Client
@@ -29,7 +30,7 @@ DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 15
-MIN_REPLIES = 5  # Only reply if it already has this many comments
+MIN_REPLIES = 2  # Only reply if it already has this many comments
 
 TARGET_ACCOUNTS = [
     "daily_trust",
@@ -47,7 +48,8 @@ TARGET_ACCOUNTS = [
     "seyiamakinde",
     "renoomokri",
     "seunokin",
-    "OseniRufai"
+    "OseniRufai",
+    "YabaleftOnline"
 ]
 
 if not API_KEY:
@@ -221,7 +223,14 @@ async def run_commenter_batch(test_mode=False):
             if hasattr(tweet, "retweeted_status") and tweet.retweeted_status:
                 continue
 
-            # 3. Check for minimum replies to target active discussions
+            # 3. Check if the tweet was posted within the last 24 hours
+            tweet_time = tweet.created_at_datetime
+            now_utc = datetime.now(timezone.utc)
+            if (now_utc - tweet_time) > timedelta(hours=24):
+                print(f"Skipping tweet {tweet.id} (posted {tweet_time} which is older than 24 hours)")
+                continue
+
+            # 4. Check for minimum replies to target active discussions
             reply_count = getattr(tweet, "reply_count", 0) or 0
             if reply_count < min_replies_needed:
                 print(f"Skipping tweet {tweet.id} (replies: {reply_count} < {min_replies_needed})")
