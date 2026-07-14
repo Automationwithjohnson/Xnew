@@ -269,7 +269,11 @@ async def run_commenter_batch(test_mode=False):
                 print("Failed to generate comment. Skipping.")
                 continue
 
-            print(f"Drafted Comment:\n{comment_content}")
+            # Programmatically enforce the under 250-character limit
+            if len(comment_content) > 245:
+                comment_content = comment_content[:242].strip() + "..."
+
+            print(f"Drafted Comment:\n{comment_content} (Length: {len(comment_content)})")
 
             # 6. Post the reply/comment
             try:
