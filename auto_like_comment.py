@@ -29,7 +29,7 @@ COOKIES_PATH = os.getenv("COOKIES_PATH", "Xaccountdata.json")
 DB_PATH = "liked_comments.db"
 
 # Target configuration
-LOOP_INTERVAL_MINUTES = 15
+LOOP_INTERVAL_MINUTES = 30
 MIN_REPLIES = 2  # Only reply if it already has this many comments
 
 TARGET_ACCOUNTS = [
@@ -197,7 +197,7 @@ async def run_commenter_batch(test_mode=False):
 
     min_replies_needed = 0 if test_mode else MIN_REPLIES
     successful_replies = 0
-    max_replies_to_post = 3 if test_mode else 9999
+    max_replies_to_post = 3 if test_mode else 5
 
     for username in targets:
         if successful_replies >= max_replies_to_post:
