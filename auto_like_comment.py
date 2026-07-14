@@ -44,9 +44,9 @@ TARGET_ACCOUNTS = [
     "MobilePunch",
     "PremiumTimesng",
     "officialABAT",
-    "SeyiAMakinde",
+    "seyiamakinde",
     "renoomokri",
-    "seunokevalet",
+    "seunokin",
     "OseniRufai"
 ]
 
@@ -204,7 +204,7 @@ async def run_commenter_batch(test_mode=False):
         print(f"\nChecking latest posts from: @{username}")
         try:
             user = await client.get_user_by_screen_name(username)
-            tweets = await client.get_user_tweets(user.id, count=5)
+            tweets = await client.get_user_tweets(user.id, 'Tweets', count=5)
         except Exception as e:
             print(f"Failed to fetch tweets for @{username}: {e}")
             continue
