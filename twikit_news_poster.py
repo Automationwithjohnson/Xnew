@@ -367,7 +367,7 @@ async def process_post(client, db_conn, article, dry_run=False):
     if not media_url:
         print(f"Skipping article '{title}' because no media image was found.")
         record_posted(db_conn, link, title)
-        return
+        return False
         
     article_text = page_text if len(page_text) > 50 else description
     
@@ -409,14 +409,18 @@ async def process_post(client, db_conn, article, dry_run=False):
     if not temp_file_path or not os.path.exists(temp_file_path):
         print(f"Skipping article '{title}' because the media image could not be downloaded.")
         record_posted(db_conn, link, title)
-        return
+        return False
 
     # 4. Post to Twitter
     if dry_run:
         print("Dry run mode: Skipped X posting.")
         if temp_file_path and os.path.exists(temp_file_path):
             print(f"Dry run mode: Media download path was {temp_file_path}")
-        return
+            try:
+                os.remove(temp_file_path)
+            except:
+                pass
+        return True
 
     try:
         media_ids = []
@@ -436,10 +440,11 @@ async def process_post(client, db_conn, article, dry_run=False):
         print("Tweet posted successfully!")
         
         record_posted(db_conn, link, title)
+        return True
         
     except Exception as e:
         print(f"Failed to post tweet: {e}")
-        raise e
+        return False
     finally:
         if temp_file_path and os.path.exists(temp_file_path):
             try:
@@ -556,8 +561,7 @@ async def main():
     import random
     random.shuffle(new_articles)
 
-    to_process = new_articles[:limit]
-    print(f"Processing top {len(to_process)} articles...")
+    print(f"Processing new articles dynamically to reach target limit of {limit} successful posts...")
     
     twitter_client = None
     if not dry_run:
@@ -568,14 +572,21 @@ async def main():
             db_conn.close()
             return
         
-    for idx, article in enumerate(to_process):
+    successful_posts = 0
+    for article in new_articles:
+        if successful_posts >= limit:
+            print(f"Reached post limit: {limit}. Stopping batch.")
+            break
+            
         try:
-            await process_post(twitter_client, db_conn, article, dry_run=dry_run)
-            if not dry_run and idx < len(to_process) - 1:
-                import random
-                delay = random.randint(120, 240)
-                print(f"Waiting for {delay / 60:.1f} minutes before posting next story...")
-                await asyncio.sleep(delay)
+            posted = await process_post(twitter_client, db_conn, article, dry_run=dry_run)
+            if posted:
+                successful_posts += 1
+                if not dry_run and successful_posts < limit:
+                    import random
+                    delay = random.randint(120, 240)
+                    print(f"Waiting for {delay / 60:.1f} minutes before posting next story...")
+                    await asyncio.sleep(delay)
         except Exception as e:
             print(f"Skipping article due to error: {e}")
             
