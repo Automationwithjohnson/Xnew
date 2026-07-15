@@ -194,12 +194,23 @@ async def run_commenter_batch(test_mode=False):
         if successful_replies >= max_replies_to_post:
             break
             
+        # Reset the client transaction state if a previous request left it half-initialized
+        if hasattr(client, 'client_transaction'):
+            ct = client.client_transaction
+            if ct.home_page_response and not hasattr(ct, 'key'):
+                print("Detected half-initialized client transaction. Resetting transaction state...")
+                ct.home_page_response = None
+            
         print(f"\nChecking latest posts from: @{username}")
         try:
             user = await client.get_user_by_screen_name(username)
             tweets = await client.get_user_tweets(user.id, 'Tweets', count=5)
         except Exception as e:
+            import traceback
             print(f"Failed to fetch tweets for @{username}: {e}")
+            traceback.print_exc()
+            if hasattr(client, 'client_transaction'):
+                client.client_transaction.home_page_response = None
             continue
 
         for tweet in tweets:
