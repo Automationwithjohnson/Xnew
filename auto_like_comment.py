@@ -7,6 +7,7 @@ import json
 import asyncio
 import requests
 import re
+import base64
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -88,12 +89,20 @@ def scrape_article_text(url):
         print(f"Link scraping skipped: {e}")
     return ""
 
-def call_openrouter(x_post_text, article_context=""):
+def get_base64_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def call_openrouter(x_post_text, article_context="", image_path=None):
     ai_limit = 200  # Enforce strict limit under 250 characters
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
     
-    prompt = f"""You are a passionate, highly knowledgeable football fan and pundit with sharp, banter-friendly, and engaging takes. You love discussing football tactics, player stats, transfer drama, club performances, and league action (Premier League, Champions League, La Liga, and African football).
+    image_instruction = ""
+    if image_path:
+        image_instruction = "- Analyze both the text and the image. Use details from the image (the player's face, the stats, the action) to write a customized banter comment.\n"
+
+    prompt = f"""You are a passionate, highly biased Chelsea/Manchester United football fan and pundit with sharp, banter-friendly, and engaging takes. You love discussing football tactics, player stats, transfer drama, club performances, and league action (Premier League, Champions League, La Liga, and African football).
 
 Task:
 I will give you an X post from my feed. You will analyze it and write a short, engaging comment to reply directly under the post.
@@ -102,9 +111,9 @@ Rules:
 
 - Length Constraint: The entire reply MUST be under {ai_limit} characters. Keep it brief.
 - Simple English Constraint: Write in very simple English that even a kid can understand.
-- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply. If a sentence requires a pause, use conjunctions (and, but, so) or split it into two distinct sentences. Maintain a clean, direct sentence structure.
+- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply. If a sentence requires a pause, use conjunctions (and, but, so) or split it into two sentences. Maintain a clean, direct sentence structure.
 - Add real value: Give banter, stats, tactical takes, or a unique football angle. Never just agree or repeat the post.
-- Style Variation: Vary your opening style. Sometimes start with a direct question (but do not end with one), sometimes with a strong opinion, and sometimes with a surprising fact. Make each response feel unique, fresh, and distinct.
+{image_instruction}- Style Variation: Vary your opening style. Sometimes start with a direct question (but do not end with one), sometimes with a strong opinion, and sometimes with a surprising fact. Make each response feel unique, fresh, and distinct.
 - Natural Banter: Keep it light and banter-friendly where appropriate, but sound like a true football enthusiast.
 - Sound natural and conversational (not robotic or corporate).
 - Keep it relatively short and easy to read on mobile.
@@ -123,10 +132,36 @@ Here is the X post:
         "HTTP-Referer": "https://automatewithjohnson.com",
         "X-Title": "AutomatesWithJohnson Auto Commenter"
     }
+    
+    if image_path:
+        base64_image = get_base64_image(image_path)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ]
+        model_to_use = "google/gemini-2.5-flash"
+    else:
+        messages = [{"role": "user", "content": prompt}]
+        model_to_use = MODEL
+
     payload = {
-        "model": MODEL,
-        "messages": [{"role": "user", "content": prompt}]
+        "model": model_to_use,
+        "messages": messages
     }
+    
     try:
         resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=40)
         resp.raise_for_status()
@@ -265,8 +300,31 @@ async def run_commenter_batch(test_mode=False):
             # Wait between Like and Comment (1s in test, 5-15s in prod)
             await asyncio.sleep(1 if test_mode else random.randint(5, 15))
 
-            # 5. Generate reply content
-            comment_content = call_openrouter(tweet.text, article_context)
+            # 5. Check for image media and download if present
+            temp_img_path = None
+            if hasattr(tweet, "media") and tweet.media:
+                photos = [m for m in tweet.media if m.type == "photo"]
+                if photos:
+                    photo_media = photos[0]
+                    temp_img_path = os.path.join(SCRIPT_DIR, f"temp_tweet_img_{tweet.id}.jpg")
+                    try:
+                        print("Downloading post image for AI vision...")
+                        await photo_media.download(temp_img_path)
+                        print("Photo downloaded successfully.")
+                    except Exception as e:
+                        print(f"Failed to download image, falling back to text-only: {e}")
+                        temp_img_path = None
+
+            # 6. Generate reply content
+            comment_content = call_openrouter(tweet.text, article_context, temp_img_path)
+            
+            # Clean up temp image
+            if temp_img_path:
+                try:
+                    os.remove(temp_img_path)
+                except:
+                    pass
+
             if not comment_content:
                 print("Failed to generate comment. Skipping.")
                 continue
