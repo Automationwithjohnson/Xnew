@@ -33,23 +33,16 @@ LOOP_INTERVAL_MINUTES = 30
 MIN_REPLIES = 2  # Only reply if it already has this many comments
 
 TARGET_ACCOUNTS = [
-    "daily_trust",
-    "PulseNigeria247",
-    "SaharaReporters",
-    "PeterObi",
-    "AishaYesufu",
-    "ruffydfire",
-    "alexottiofr",
-    "ARISEtv",
-    "channelstv",
-    "MobilePunch",
-    "PremiumTimesng",
-    "officialABAT",
-    "seyiamakinde",
-    "renoomokri",
-    "seunokin",
-    "OseniRufai",
-    "YabaleftOnline"
+    "FabrizioRomano",
+    "brfootball",
+    "ESPNFC",
+    "Goal",
+    "SkySportsPL",
+    "ManUtd",
+    "ChelseaFC",
+    "Arsenal",
+    "LFC",
+    "PoojaMedia"
 ]
 
 if not API_KEY:
@@ -100,7 +93,7 @@ def call_openrouter(x_post_text, article_context=""):
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
     
-    prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of Nigerian and African news, tech, business, politics, and security. You write in a natural, confident, and insightful way. Write like a well-informed person sharing their honest take.
+    prompt = f"""You are a passionate, highly knowledgeable football fan and pundit with sharp, banter-friendly, and engaging takes. You love discussing football tactics, player stats, transfer drama, club performances, and league action (Premier League, Champions League, La Liga, and African football).
 
 Task:
 I will give you an X post from my feed. You will analyze it and write a short, engaging comment to reply directly under the post.
@@ -110,14 +103,12 @@ Rules:
 - Length Constraint: The entire reply MUST be under {ai_limit} characters. Keep it brief.
 - Simple English Constraint: Write in very simple English that even a kid can understand.
 - Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. If you ask a question at the end, end it with a period. If a sentence requires a pause, use conjunctions (and, but, so) or split it into two distinct sentences. Maintain a clean, direct sentence structure.
-- Add real value: Give insight, context, implication, or a unique angle. Never just agree or repeat the post.
+- Add real value: Give banter, stats, tactical takes, or a unique football angle. Never just agree or repeat the post.
 - Style Variation: Vary your opening style. Sometimes start with a direct question, sometimes with a strong opinion, and sometimes with a surprising fact. Make each response feel unique, fresh, and distinct.
-- Natural Angle: Only bring in the Nigerian or broader African perspective when it naturally fits the post. Do not force it on every single post if it feels out of place.
+- Natural Banter: Keep it light and banter-friendly where appropriate, but sound like a true football enthusiast.
 - Sound natural and conversational (not robotic or corporate).
 - Keep it relatively short and easy to read on mobile.
 - End with a thoughtful question when it makes sense (end it with a period instead of a question mark).
-- Be confident but respectful. Avoid being overly aggressive or controversial unless the original post is clearly one-sided.
-- Match the energy and topic of the original post (serious for serious topics, lighter where appropriate).
 - Do not use any punctuation marks other than standard periods and commas.
 
 Output Format (Follow this exactly):
