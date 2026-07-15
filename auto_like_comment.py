@@ -32,19 +32,7 @@ DB_PATH = "liked_comments.db"
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
 MIN_REPLIES = 2  # Only reply if it already has this many comments
-
-TARGET_ACCOUNTS = [
-    "FabrizioRomano",
-    "brfootball",
-    "ESPNFC",
-    "Goal",
-    "SkySportsPL",
-    "ManUtd",
-    "ChelseaFC",
-    "Arsenal",
-    "LFC",
-    "PoojaMedia"
-]
+SEARCH_QUERY = "football filter:images"
 
 if not API_KEY:
     print("Error: OPENROUTER_API_KEY is not set in .env file!")
@@ -217,47 +205,48 @@ async def run_commenter_batch(test_mode=False):
         db_conn.close()
         return
 
-    # Shuffle targets to keep checking order random and natural
-    targets = list(TARGET_ACCOUNTS)
-    random.shuffle(targets)
-
     min_replies_needed = 0 if test_mode else MIN_REPLIES
     successful_replies = 0
     max_replies_to_post = 3 if test_mode else 5
 
-    for username in targets:
+    # Reset the client transaction state if a previous request left it half-initialized
+    if hasattr(client, 'client_transaction'):
+        ct = client.client_transaction
+        if ct.home_page_response and not hasattr(ct, 'key'):
+            print("Detected half-initialized client transaction. Resetting transaction state...")
+            ct.home_page_response = None
+            
+    print(f"\nSearching X for Top posts matching: '{SEARCH_QUERY}'...")
+    try:
+        tweets = await client.search_tweet(SEARCH_QUERY, 'Top', count=25)
+        print(f"Search successful. Found {len(tweets)} tweets.")
+    except Exception as e:
+        import traceback
+        print(f"Failed to fetch search results for query '{SEARCH_QUERY}': {e}")
+        traceback.print_exc()
+        if hasattr(client, 'client_transaction'):
+            client.client_transaction.home_page_response = None
+        db_conn.close()
+        return
+
+    for tweet in tweets:
         if successful_replies >= max_replies_to_post:
             break
-            
-        # Reset the client transaction state if a previous request left it half-initialized
-        if hasattr(client, 'client_transaction'):
-            ct = client.client_transaction
-            if ct.home_page_response and not hasattr(ct, 'key'):
-                print("Detected half-initialized client transaction. Resetting transaction state...")
-                ct.home_page_response = None
-            
-        print(f"\nChecking latest posts from: @{username}")
-        try:
-            user = await client.get_user_by_screen_name(username)
-            tweets = await client.get_user_tweets(user.id, 'Tweets', count=5)
-        except Exception as e:
-            import traceback
-            print(f"Failed to fetch tweets for @{username}: {e}")
-            traceback.print_exc()
-            if hasattr(client, 'client_transaction'):
-                client.client_transaction.home_page_response = None
+
+        print(f"Evaluating tweet {tweet.id} by @{tweet.user.screen_name} (Created: {tweet.created_at_datetime})")
+
+        # 1. Skip if it is our own tweet or we already processed it
+        if tweet.user.id == my_id or is_already_processed(db_conn, tweet.id):
             continue
 
-        for tweet in tweets:
-            if successful_replies >= max_replies_to_post:
-                break
+        # 2. Skip retweets
+        if hasattr(tweet, "retweeted_status") and tweet.retweeted_status:
+            continue
 
-            # 1. Skip if it is our own tweet or we already processed it
-            if tweet.user.id == my_id or is_already_processed(db_conn, tweet.id):
-                continue
-
-            # 2. Skip retweets
-            if hasattr(tweet, "retweeted_status") and tweet.retweeted_status:
+        # 2.5 Skip if the tweet contains video or animated GIF media
+        if hasattr(tweet, "media") and tweet.media:
+            if any(m.type in ["video", "animated_gif"] for m in tweet.media):
+                print(f"Skipping tweet {tweet.id} (contains video or GIF)")
                 continue
 
             # 3. Check if the tweet was posted within the last 24 hours
