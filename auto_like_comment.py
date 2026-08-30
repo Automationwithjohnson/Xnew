@@ -192,7 +192,7 @@ Here is the X post:
     return None
 
 async def setup_twitter_client():
-    """Load cookies from standard JSON export and login to X"""
+    """Load cookies from standard JSON export and login to X without duplicate cookie conflicts"""
     client = Client("en-US")
     
     cookies_file = os.path.join(SCRIPT_DIR, COOKIES_PATH)
@@ -208,18 +208,10 @@ async def setup_twitter_client():
             name = cookie.get("name")
             value = cookie.get("value")
             if name and value:
-                formatted_cookies[name] = value
-        cookies_data = formatted_cookies
-        
-        temp_cookies_path = os.path.join(SCRIPT_DIR, "temp_x_cookies_comment.json")
-        with open(temp_cookies_path, "w", encoding="utf-8") as temp_f:
-            json.dump(formatted_cookies, temp_f)
-            
-        client.load_cookies(temp_cookies_path)
-        try:
-            os.remove(temp_cookies_path)
-        except:
-            pass
+                formatted_cookies[name] = str(value)
+        client.set_cookies(formatted_cookies, clear_cookies=True)
+    elif isinstance(cookies_data, dict):
+        client.set_cookies(cookies_data, clear_cookies=True)
     else:
         client.load_cookies(cookies_file)
         
