@@ -222,14 +222,45 @@ def clean_text(text):
     cleaned = soup.get_text()
     return " ".join(cleaned.split()).strip()
 
+def unwrap_google_news_url(url):
+    """Unwrap Google News RSS URL to get the original news publisher URL"""
+    if not url or "news.google.com" not in url:
+        return url
+        
+    try:
+        parts = url.split("articles/")
+        if len(parts) > 1:
+            article_id = parts[1].split("?")[0]
+            padded_id = article_id + "=" * (-len(article_id) % 4)
+            try:
+                decoded_bytes = base64.b64decode(padded_id)
+                urls = re.findall(r'https?://[^\s"\'<>\x00-\x1f]+', decoded_bytes.decode('latin1', errors='ignore'))
+                for u in urls:
+                    if "news.google.com" not in u and "." in u:
+                        clean_u = re.sub(r'[\x00-\x1f\x7f-\xff].*$', '', u)
+                        return clean_u
+            except Exception:
+                pass
+                
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, allow_redirects=True, timeout=6)
+        if resp.url and "google.com" not in resp.url:
+            return resp.url
+    except Exception:
+        pass
+        
+    return url
+
 def scrape_webpage(url):
     """Scrape article page for media URLs and paragraph text"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     media_url = None
     paragraphs = []
     
+    real_url = unwrap_google_news_url(url)
+    
     try:
-        resp = requests.get(url, headers=headers, timeout=4)
+        resp = requests.get(real_url, headers=headers, timeout=8)
         if resp.status_code != 200:
             return None, ""
             
@@ -249,9 +280,12 @@ def scrape_webpage(url):
                 # Check for generic logos
                 generic_keywords = [
                     "punch-logo", "default-logo", "placeholder", "logo-", 
-                    "/logo.", "vanguardngr.com/wp-content/uploads/"
+                    "/logo.", "vanguardngr.com/wp-content/uploads/",
+                    "googleusercontent.com", "google.com", "gstatic.com",
+                    "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
+                    "default_image", "no-image", "site-logo"
                 ]
-                is_generic = any(kw in img_candidate for kw in generic_keywords)
+                is_generic = any(kw in img_candidate.lower() for kw in generic_keywords)
                 if not is_generic:
                     media_url = img_candidate
                     
@@ -270,7 +304,7 @@ def scrape_webpage(url):
                 paragraphs.append(p_text)
                 
     except Exception as e:
-        print(f"Scraping failed for {url}: {e}")
+        print(f"Scraping failed for {real_url}: {e}")
         
     return media_url, "\n\n".join(paragraphs)
 
@@ -452,26 +486,27 @@ async def process_post(client, db_conn, article, dry_run=False):
     
     # 3. Download media
     temp_file_path = None
-    try:
-        print(f"Downloading media: {media_url}")
-        resp = requests.get(media_url, stream=True, timeout=20)
-        if resp.status_code == 200:
-            ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
-            if not ext.startswith("."):
-                ext = "." + ext
-            if ext == ".jpe":
-                ext = ".jpg"
-            
-            fd, temp_file_path = tempfile.mkstemp(suffix=ext)
-            os.close(fd)
-            
-            with open(temp_file_path, "wb") as out_file:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    out_file.write(chunk)
-            print(f"Media saved to: {temp_file_path}")
-    except Exception as e:
-        print(f"Media download failed: {e}")
-        temp_file_path = None
+    if media_url:
+        try:
+            print(f"Downloading media: {media_url}")
+            resp = requests.get(media_url, stream=True, timeout=20)
+            if resp.status_code == 200:
+                ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
+                if not ext.startswith("."):
+                    ext = "." + ext
+                if ext == ".jpe":
+                    ext = ".jpg"
+                
+                fd, temp_file_path = tempfile.mkstemp(suffix=ext)
+                os.close(fd)
+                
+                with open(temp_file_path, "wb") as out_file:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        out_file.write(chunk)
+                print(f"Media saved to: {temp_file_path}")
+        except Exception as e:
+            print(f"Media download failed: {e}")
+            temp_file_path = None
         
     # If image download failed or wasn't available, proceed as text-only tweet
     if not temp_file_path or not os.path.exists(temp_file_path):
@@ -570,7 +605,7 @@ async def main():
             print(f"Found {len(feed.entries)} items")
             
             for entry in feed.entries:
-                link = entry.get("link")
+                link = unwrap_google_news_url(entry.get("link"))
                 title = entry.get("title")
                 if not link or not title:
                     continue
