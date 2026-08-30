@@ -65,6 +65,23 @@ def run_commenter_loop():
             log(f"Auto commenter loop crashed: {e}")
         time.sleep(30)
 
+def run_keep_alive_loop():
+    """Ping own health endpoint every 8 minutes to prevent Render Free tier from sleeping"""
+    import urllib.request
+    time.sleep(30)
+    service_url = os.getenv("RENDER_EXTERNAL_URL", "https://newsforx.onrender.com")
+    health_url = f"{service_url.rstrip('/')}/health"
+    log(f"Self-ping keep-alive loop started targeting {health_url}")
+    
+    while True:
+        try:
+            req = urllib.request.Request(health_url, headers={"User-Agent": "RenderKeepAlive/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                log(f"Keep-alive self-ping status: {resp.status}")
+        except Exception as e:
+            log(f"Keep-alive self-ping notice: {e}")
+        time.sleep(8 * 60)
+
 @app.route('/')
 @app.route('/health')
 def health_check():
@@ -98,9 +115,11 @@ def trigger_comment():
 if __name__ == "__main__":
     t1 = threading.Thread(target=run_news_loop, daemon=True)
     t2 = threading.Thread(target=run_commenter_loop, daemon=True)
+    t3 = threading.Thread(target=run_keep_alive_loop, daemon=True)
     
     t1.start()
     t2.start()
+    t3.start()
     
     port = int(os.getenv("PORT", "10000"))
     log(f"Starting Flask web server on port {port}...")
