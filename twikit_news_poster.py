@@ -309,7 +309,7 @@ Author: {author or 'Unknown'}"""
 
 async def setup_twitter_client():
     """Load cookies from standard JSON export and login to X without duplicate cookie conflicts"""
-    client = Client("en-US")
+    client = Client("en-US", user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
     
     if not os.path.exists(COOKIES_PATH) or os.path.getsize(COOKIES_PATH) < 10:
         raise Exception(f"Please paste your exported cookies into {COOKIES_PATH} first!")

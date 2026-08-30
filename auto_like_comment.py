@@ -193,7 +193,7 @@ Here is the X post:
 
 async def setup_twitter_client():
     """Load cookies from standard JSON export and login to X without duplicate cookie conflicts"""
-    client = Client("en-US")
+    client = Client("en-US", user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
     
     cookies_file = os.path.join(SCRIPT_DIR, COOKIES_PATH)
     if not os.path.exists(cookies_file) or os.path.getsize(cookies_file) < 10:
@@ -232,9 +232,9 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
     
     try:
         client = await setup_twitter_client()
-        user_info = await client.user()
-        my_id = user_info.id
-        print(f"Twitter client initialized for @{user_info.screen_name} (ID: {my_id})")
+        my_id = "2025200557"
+        my_username = "AlayeCodes"
+        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
     except Exception as e:
         print(f"Failed to initialize Twitter client: {e}")
         db_conn.close()
