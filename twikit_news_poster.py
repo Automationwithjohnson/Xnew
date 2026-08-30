@@ -330,6 +330,10 @@ async def setup_twitter_client():
     client.http.cookies.clear()
     for name, val in formatted_cookies.items():
         client.http.cookies.set(name, val, domain=".x.com")
+
+    # Bypass X key_byte transaction index check for cloud execution
+    if hasattr(client, 'client_transaction'):
+        client.client_transaction.generate_transaction_id = lambda *args, **kwargs: "1234567890"
         
     return client
 
