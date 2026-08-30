@@ -1,0 +1,19 @@
+services:
+  - type: worker
+    name: news-for-x-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -u run_all_render.py
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: X_COOKIES_JSON
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-3-ultra-550b-a55b:free
+      - key: X_PREMIUM
+        value: "true"
+      - key: MAX_TWEET_LENGTH
+        value: "1500"
+      - key: WINDOW_MINUTES
+        value: "30"

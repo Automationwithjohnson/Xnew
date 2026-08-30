@@ -25,14 +25,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
+MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 COOKIES_PATH = os.getenv("COOKIES_PATH", "Xaccountdata.json")
 DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
 MIN_REPLIES = 2  # Only reply if it already has this many comments
-SEARCH_QUERY = "football filter:images"
+SEARCH_QUERIES = [
+    "tech OR technology OR AI OR LLM filter:images",
+    "business OR finance OR startup OR economy filter:images",
+    "news OR breaking OR sports OR culture filter:images",
+    "productivity OR software OR coding OR design filter:images"
+]
 
 if not API_KEY:
     print("Error: OPENROUTER_API_KEY is not set in .env file!")
@@ -88,28 +93,28 @@ def call_openrouter(x_post_text, article_context="", image_path=None):
     
     image_instruction = ""
     if image_path:
-        image_instruction = "- Analyze both the text and the image. Use details from the image (the player's face, the stats, the action) to write a customized banter comment.\n"
+        image_instruction = "- Analyze both the text and the image. Use details from the image (the charts, the branding, the people, the text in the image) to write a customized reaction comment.\n"
 
-    prompt = f"""You are a passionate, highly biased Chelsea/Manchester United football fan and pundit with sharp, banter-friendly, and engaging takes. You love discussing football tactics, player stats, transfer drama, club performances, and league action (Premier League, Champions League, La Liga, and African football).
+    prompt = f"""You are a smart, insightful, and adaptable commentator on X. Your style is conversational, knowledgeable, friendly, and street-smart. You seamlessly adapt your commentary to WHATEVER content, topic, or niche you encounter (tech, AI, business, finance, news, sports, culture, design, or daily observations).
 
 Task:
-I will give you an X post from my feed. You will analyze it and write a short, engaging comment to reply directly under the post.
+Analyze the X post (and any image/link context provided) and write a short, sharp, highly relevant reply directly under the post.
 
 Rules:
 
+- Universal Adaptation & Strict Relevance: Your reply MUST directly adapt to and address the specific content, facts, or story of the post. If the post is about tech or business, give an insider tech/business take. If the post is about news, sports, or culture, give a smart, engaging commentary on that exact event.
+- Natural Integration: Never force pre-written pitches. Only mention automation, workflows, or systems if the post specifically talks about manual tasks, data entry, CRM syncs, or software tools where it fits 100% naturally. Otherwise, just write a sharp, smart reaction to the post topic itself.
 - Length Constraint: The entire reply MUST be under {ai_limit} characters. Keep it brief.
-- Simple English Constraint: Write in very simple English that even a kid can understand.
-- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply. If a sentence requires a pause, use conjunctions (and, but, so) or split it into two sentences. Maintain a clean, direct sentence structure.
-- Add real value: Give banter, stats, tactical takes, or a unique football angle. Never just agree or repeat the post.
-{image_instruction}- Style Variation: Vary your opening style. Sometimes start with a direct question (but do not end with one), sometimes with a strong opinion, and sometimes with a surprising fact. Make each response feel unique, fresh, and distinct.
-- Natural Banter: Keep it light and banter-friendly where appropriate, but sound like a true football enthusiast.
+- Simple English Constraint: Write in clear, simple English that even a kid can understand.
+- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply. Make it a direct statement or opinion.
+- Add real value: Speak like someone who understands real-world facts, human nature, and growth.
+{image_instruction}- Style Variation: Vary your opening style. Sometimes start with a strong opinion, sometimes with a surprising observation, and sometimes with a direct statement.
 - Sound natural and conversational (not robotic or corporate).
 - Keep it relatively short and easy to read on mobile.
-- Do not end with a question or ask any questions at the end of the comment. Make it a direct, engaging statement or opinion instead.
 - Do not use any punctuation marks other than standard periods and commas.
 
 Output Format (Follow this exactly):
-Output ONLY the reply text. Do not include any headers, labels, or intros.
+CRITICAL: Output ONLY the exact reply text. Do not include any headers, labels, intros, or explanations. You MUST NOT start with "Here is my reply:" or output any thoughts or reasons about the tweet. Output ONLY the comment itself.
 
 Here is the X post:
 {x_post_text}{context_str}"""
@@ -121,42 +126,70 @@ Here is the X post:
         "X-Title": "AutomatesWithJohnson Auto Commenter"
     }
     
+    model_to_use = MODEL
+    
+    payloads_to_try = []
+    # Try multimodal payload if image exists
     if image_path:
-        base64_image = get_base64_image(image_path)
-        messages = [
-            {
-                "role": "user",
-                "content": [
+        try:
+            base64_image = get_base64_image(image_path)
+            payloads_to_try.append({
+                "model": "google/gemini-2.5-flash",
+                "messages": [
                     {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
                     }
                 ]
-            }
-        ]
-        model_to_use = "google/gemini-2.5-flash"
-    else:
-        messages = [{"role": "user", "content": prompt}]
-        model_to_use = MODEL
-
-    payload = {
+            })
+        except Exception as e:
+            print(f"Base64 image encoding failed, falling back to text: {e}")
+            
+    # Always include text-only payload as primary or fallback
+    payloads_to_try.append({
         "model": model_to_use,
-        "messages": messages
-    }
-    
-    try:
-        resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=40)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip().replace('"', '')
-    except Exception as e:
-        print(f"OpenRouter call failed: {e}")
-        return None
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    for payload in payloads_to_try:
+        try:
+            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=40)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    msg = data["choices"][0].get("message", {})
+                    content = (msg.get("content") or "").strip()
+                    if content:
+                        # Clean up inner monologue or headers
+                        lower_content = content.lower()
+                        markers = [
+                            "here is my reply:",
+                            "here's my reply:",
+                            "here is the reply:",
+                            "here's the reply:",
+                            "my reply:",
+                            "reply:"
+                        ]
+                        for marker in markers:
+                            if marker in lower_content:
+                                idx = lower_content.find(marker)
+                                content = content[idx + len(marker):].strip()
+                                break
+                                
+                        content = content.replace('"', '').strip()
+                        return content
+                else:
+                    print(f"OpenRouter status 200 missing choices: {data}")
+            else:
+                print(f"OpenRouter payload returned status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"OpenRouter attempt failed: {e}")
+
+    print("All OpenRouter attempts failed to generate a valid comment.")
+    return None
 
 async def setup_twitter_client():
     """Load cookies from standard JSON export and login to X"""
@@ -192,7 +225,7 @@ async def setup_twitter_client():
         
     return client
 
-async def run_commenter_batch(test_mode=False):
+async def run_commenter_batch(test_mode=False, now_mode=False):
     db_conn = setup_database()
     
     try:
@@ -209,23 +242,30 @@ async def run_commenter_batch(test_mode=False):
     successful_replies = 0
     max_replies_to_post = 3 if test_mode else 5
 
-    # Reset the client transaction state if a previous request left it half-initialized
-    if hasattr(client, 'client_transaction'):
-        ct = client.client_transaction
-        if ct.home_page_response and not hasattr(ct, 'key'):
-            print("Detected half-initialized client transaction. Resetting transaction state...")
-            ct.home_page_response = None
-            
-    print(f"\nSearching X for Top posts matching: '{SEARCH_QUERY}'...")
-    try:
-        tweets = await client.search_tweet(SEARCH_QUERY, 'Top', count=25)
-        print(f"Search successful. Found {len(tweets)} tweets.")
-    except Exception as e:
-        import traceback
-        print(f"Failed to fetch search results for query '{SEARCH_QUERY}': {e}")
-        traceback.print_exc()
+    tweets = []
+    for query in SEARCH_QUERIES:
+        # Reset the client transaction state if a previous request left it half-initialized
         if hasattr(client, 'client_transaction'):
-            client.client_transaction.home_page_response = None
+            ct = client.client_transaction
+            if ct.home_page_response and not hasattr(ct, 'key'):
+                print("Detected half-initialized client transaction. Resetting transaction state...")
+                ct.home_page_response = None
+                
+        print(f"Searching X for Top posts matching: '{query}'...")
+        try:
+            results = await client.search_tweet(query, 'Top', count=10)
+            print(f"Found {len(results)} tweets for query '{query}'")
+            tweets.extend(results)
+        except Exception as e:
+            print(f"Failed to fetch search results for query '{query}': {e}")
+            if hasattr(client, 'client_transaction'):
+                client.client_transaction.home_page_response = None
+
+    # Shuffle the gathered tweets to randomize the mix of tech, AI, and business
+    random.shuffle(tweets)
+    print(f"Total tweets gathered for evaluation: {len(tweets)}")
+    if not tweets:
+        print("No tweets found matching any of the queries.")
         db_conn.close()
         return
 
@@ -286,8 +326,8 @@ async def run_commenter_batch(test_mode=False):
             except Exception as e:
                 print(f"Failed to like tweet: {e}")
 
-            # Wait between Like and Comment (1s in test, 5-15s in prod)
-            await asyncio.sleep(1 if test_mode else random.randint(5, 15))
+            # Wait between Like and Comment (1s in test/now mode, 5-15s in prod)
+            await asyncio.sleep(1 if (test_mode or now_mode) else random.randint(5, 15))
 
             # 5. Check for image media and download if present
             temp_img_path = None
@@ -338,7 +378,7 @@ async def run_commenter_batch(test_mode=False):
 
             # Wait before moving to next match (0s in test, 3-5 minutes in prod)
             if successful_replies < max_replies_to_post:
-                delay = 1 if test_mode else random.randint(180, 300)
+                delay = 1 if (test_mode or now_mode) else random.randint(180, 300)
                 print(f"Sleeping for {delay} seconds before checking other accounts...")
                 await asyncio.sleep(delay)
 
@@ -346,11 +386,14 @@ async def run_commenter_batch(test_mode=False):
 
 async def main():
     test_mode = "--test" in sys.argv
+    now_mode = "--now" in sys.argv
     
     print("==================================================")
     print("      X AUTO LIKE & COMMENT BOT STARTING...       ")
     if test_mode:
         print("   MODE: TEST MODE (3 replies only, zero delays) ")
+    elif now_mode:
+        print("   MODE: MANUAL RUN (5 replies only, zero delays) ")
     else:
         print(f"   Interval: Every {LOOP_INTERVAL_MINUTES} minutes")
         print(f"   Target Threshold: {MIN_REPLIES}+ replies minimum")
@@ -365,6 +408,13 @@ async def main():
             print("\nTest completed successfully!")
         except Exception as e:
             print(f"Error during test execution: {e}")
+    elif now_mode:
+        try:
+            print("\nRunning manual auto like & comment batch...")
+            await run_commenter_batch(test_mode=False, now_mode=True)
+            print("\nManual run completed successfully!")
+        except Exception as e:
+            print(f"Error during manual execution: {e}")
     else:
         while True:
             try:

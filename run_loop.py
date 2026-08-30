@@ -9,7 +9,7 @@ INTERVAL_SECONDS = 900  # 15 minutes
 
 def run_poster():
     print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Triggering news poster run...")
-    args = [sys.executable, POSTER_SCRIPT] + sys.argv[1:]
+    args = [sys.executable, "-u", POSTER_SCRIPT] + sys.argv[1:]
     
     try:
         result = subprocess.run(args, cwd=SCRIPT_DIR, check=True)

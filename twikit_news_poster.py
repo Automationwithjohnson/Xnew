@@ -212,87 +212,60 @@ def call_openrouter(title, text, source, author, category):
         print("[Warning] OPENROUTER_API_KEY is not set. Generating mock text.")
         return f"{prefix}: [Mock AI summary for {title}]"
         
-    model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
-    
+def call_openrouter(title, text, source, author, category):
+    """Query OpenRouter API to draft rich, expanded long-form news posts in brand voice."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        print("[Warning] OPENROUTER_API_KEY is not set.")
+        return None
+        
+    model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
-    max_length = int(os.getenv("MAX_TWEET_LENGTH", "600"))
     
     if x_premium:
-        ai_limit = max_length - 60
-        limit_rule = f"Length Constraint: The entire response (including summary, quotes, and attributions) MUST be under {ai_limit} characters. Keep it brief to fit this limit."
+        limit_rule = """Strict Length & Finishing Constraint:
+- Write between 500 and 850 characters total (approx. 2 to 4 full paragraphs).
+- CRITICAL: You MUST finish your final sentence completely. Never leave any sentence cut off or unfinished."""
     else:
-        limit_rule = "Length Constraint: The entire response (including summary, quotes, and attributions) MUST be under 220 characters. Keep it brief to fit this limit."
+        limit_rule = "Length Constraint: The entire response MUST be under 220 characters."
     
-    prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of tech, finance, politics, sports, and business. Your writing style is conversational, insightful, and slightly opinionated. Write like a knowledgeable person explaining the news to friends on X.
+    prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of tech, finance, politics, sports, and business. Your writing style is conversational, insightful, and slightly opinionated. Write like a knowledgeable insider explaining the news on X.
 
-Your task is to transform raw scraped news into high-quality, engaging X posts that add real value instead of just repeating headlines.
+Your task is to transform raw news inputs (even brief 1-line headlines) into high-quality, rich, engaging X posts that add real value and context.
+
+### Required Structure & Layout:
+
+1. LINE 1 (Headline Title): Write a strong, clear, catchy Headline Title on the very first line. Do NOT write the word "Title:" or "Headline:". Just write the headline title directly.
+2. LINE 2: Leave a blank line.
+3. LINE 3+: Write the full commentary body explaining what happened, the context, economic/social impact, and your street-smart take.
 
 ### Strict Rules:
 
 1. {limit_rule}
 
-2. Simple English Constraint: Write in very simple English that even a kid can understand.
+2. Simple English Constraint: Write in clear, simple English that is easy to read on mobile.
 
-3. Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. If you ask a question at the end, end it with a period. If a sentence requires a pause, use conjunctions (and, but, so) or split it into two distinct sentences. Maintain a clean, direct sentence structure.
+3. ABSOLUTELY NO EMOJIS: Do NOT use any emojis, symbols, or special icons anywhere in your text. Keep it pure text.
 
-4. Add genuine value — Do not just summarize. Include at least one of these:
-   - A quick personal take or opinion
-   - Why this news matters (especially for Nigerians or Africans)
-   - Context or implication that isn't obvious in the headline
-   - A smart observation or "street-smart" angle
+4. Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. If you ask a question at the end, end it with a period. Maintain a clean, direct sentence structure.
 
-5. Style Variation: Vary your opening style. Sometimes start with a direct question, sometimes with a strong opinion, and sometimes with a surprising fact. Make each post feel unique, fresh, and distinct.
+5. Complete Sentences Only: Every single sentence MUST be fully written and closed with a period. NEVER end mid-sentence or cut off text.
 
-6. Natural Angle: Only bring in the Nigerian or broader African perspective when it naturally fits the post. Do not force it on every single post if it feels out of place.
+6. Engagement — Always end the commentary with a natural open question to encourage replies and comments (ended with a period instead of a question mark).
 
-7. Engagement — Always end the post with a natural question to encourage replies and comments (end it with a period instead of a question mark).
+7. Tone — Sound human, confident, and conversational. Avoid robotic language.
 
-8. Tone — Sound human, confident, and conversational. Avoid robotic or corporate language. Use light emojis only when they fit naturally (🚨, 😂, etc.).
+8. Never do this:
+    - Do NOT write the word "Title:" or "Headline:".
+    - Do NOT use any emojis.
+    - Do NOT leave any sentence unfinished or cut off.
+    - Do NOT include links or URLs inside your AI text.
+    - Do NOT include source credit lines (the source credit is attached automatically).
 
-9. "BREAKING" usage — Use "BREAKING" very sparingly. Only for truly major national or international stories. Never use it on every post.
+Output Format:
+Output ONLY the post text (Title on line 1, blank line, then commentary body). Nothing else.
 
-10. Length — Keep posts concise and easy to read on mobile. Aim for 2–5 short paragraphs max.
-
-11. Accuracy & Attribution — Keep all facts accurate. Always preserve the source credit at the bottom in this exact format:
-   "Via {source}{f' | Report by {author}' if author else ''}"
-
-12. Never do this:
-    - Do not copy the headline word-for-word as the main text.
-    - Do not make it feel like a news aggregator bot.
-    - Do not add fake information or exaggerate.
-    - Do not include links or URLs in your response.
-    - Do not use any punctuation marks other than standard periods and commas.
-
-### Output Format:
-Output ONLY the ready-to-post X caption. Nothing else. No explanations, no notes.
-
-### Examples of Good Style:
-
-Example 1 (Politics):
-Input: President Bola Tinubu submits Senator Kashim Shettima as his running mate for 2027.
-Output:
-🚨 Tinubu just named Shettima as his running mate again for 2027.
-
-This feels like a consolidation move rather than an attempt to broaden appeal. With the political environment tightening, I am curious whether this strengthens their position or simply plays it safe.
-
-Let me know what you think. Is it a smart strategy or a missed opportunity to bring in new faces.
-
-Via Daily Post | Report by Ochogwu Sunday
-
-Example 2 (Tech):
-Input: Accrue has launched a stablecoin-powered banking platform for African SMEs.
-Output:
-This stablecoin platform from Accrue could actually move the needle for small businesses across Africa.
-
-Instead of another shiny app, they are leaning on real agent networks for faster and cheaper cross-border payments. That practical approach usually wins in markets where trust and physical presence still matter.
-
-Tell me if you see this kind of solution scaling better than traditional banks for SMEs in Nigeria and similar markets.
-
-Via TechCabal | Report by Emmanuel Nwosu
-
-Now transform the following raw news input using the rules above:
-
-Input:
+Input to Expand:
 Title: {title}
 Text: {text}
 Category: {category}
@@ -310,14 +283,29 @@ Author: {author or 'Unknown'}"""
         "messages": [{"role": "user", "content": prompt}]
     }
     
-    try:
-        resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        ai_text = resp.json()["choices"][0]["message"]["content"].strip()
-        return ai_text
-    except Exception as e:
-        print(f"OpenRouter API call failed: {e}")
-        return f"{title}\n\nVia {source}{f' | Report by {author}' if author else ''}"
+    for attempt in range(3):
+        try:
+            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=35)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    ai_text = data["choices"][0]["message"]["content"].strip()
+                    if x_premium and len(ai_text) < 250 and attempt < 2:
+                        print(f"[WARN] AI output too short ({len(ai_text)} chars). Retrying expansion attempt {attempt+2}...")
+                        time.sleep(2)
+                        continue
+                    return ai_text
+                else:
+                    print(f"[WARN] OpenRouter API returned error/no choices: {data}")
+                    time.sleep(2)
+            else:
+                print(f"[WARN] OpenRouter status {resp.status_code}: {resp.text}")
+                time.sleep(2)
+        except Exception as e:
+            print(f"[WARN] OpenRouter API call failed (attempt {attempt+1}): {e}")
+            time.sleep(2)
+
+    return None
 
 async def setup_twitter_client():
     """Load cookies from standard JSON export and login to X"""
@@ -373,14 +361,31 @@ async def process_post(client, db_conn, article, dry_run=False):
     
     # 2. Get AI tweet text
     tweet_text = call_openrouter(title, article_text, source, author, category)
-    
-    # Handle character limit based on X Premium configuration
-    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
-    if not x_premium and len(tweet_text) > 255:
-        print(f"[Warning] Drafted text is too long ({len(tweet_text)} chars). Truncating to 255 chars to fit standard X limits.")
-        tweet_text = tweet_text[:252] + "..."
+    if not tweet_text:
+        print(f"Skipping article '{title}' because AI text generation failed.")
+        return False
         
-    formatted_tweet = f"{tweet_text}\n\n{link}"
+    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
+    if x_premium and len(tweet_text) < 250:
+        print(f"Skipping article '{title}' because generated post was too short ({len(tweet_text)} chars).")
+        return False
+        
+    source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
+    max_total_len = int(os.getenv("MAX_TWEET_LENGTH", "1500")) if x_premium else 280
+    
+    overhead = len(source_line) + len(link) + 8
+    max_body_len = max_total_len - overhead
+    
+    if len(tweet_text) > max_body_len:
+        print(f"[Warning] Drafted text body ({len(tweet_text)} chars) exceeds limit ({max_body_len} chars). Truncating at last full sentence.")
+        truncated = tweet_text[:max_body_len]
+        last_dot = truncated.rfind('.')
+        if last_dot > 200:
+            tweet_text = truncated[:last_dot + 1].strip()
+        else:
+            tweet_text = truncated.strip()
+        
+    formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
     print(f"Drafted Tweet:\n{formatted_tweet}")
     
     # 3. Download media
@@ -430,8 +435,8 @@ async def process_post(client, db_conn, article, dry_run=False):
             media_ids = [media_id]
             print(f"Media uploaded. ID: {media_id}")
             
-        print("Posting tweet via Twikit...")
-        is_note = len(formatted_tweet) > 280
+        x_premium = os.getenv("X_PREMIUM", "false").lower() in ("true", "1", "yes")
+        is_note = len(formatted_tweet) > 280 and x_premium
         await client.create_tweet(
             text=formatted_tweet,
             media_ids=media_ids if media_ids else None,
