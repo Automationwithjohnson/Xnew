@@ -229,7 +229,7 @@ def scrape_webpage(url):
     paragraphs = []
     
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=4)
         if resp.status_code != 200:
             return None, ""
             
@@ -348,32 +348,32 @@ Author: {author or 'Unknown'}"""
         "HTTP-Referer": "https://automatewithjohnson.com",
         "X-Title": "AutomatesWithJohnson News Poster"
     }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
     
-    for attempt in range(3):
+    fallback_models = [
+        "meta-llama/llama-3.3-70b-instruct",
+        "google/gemini-2.5-flash",
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-chat"
+    ]
+    if model and model not in fallback_models:
+        fallback_models.insert(0, model)
+    
+    for current_model in fallback_models:
+        if not current_model:
+            continue
+        payload = {
+            "model": current_model,
+            "messages": [{"role": "user", "content": prompt}]
+        }
         try:
-            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=35)
+            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=12)
             if resp.status_code == 200:
                 data = resp.json()
                 if "choices" in data and len(data["choices"]) > 0:
                     ai_text = data["choices"][0]["message"]["content"].strip()
-                    if x_premium and len(ai_text) < 250 and attempt < 2:
-                        print(f"[WARN] AI output too short ({len(ai_text)} chars). Retrying expansion attempt {attempt+2}...")
-                        time.sleep(2)
-                        continue
                     return ai_text
-                else:
-                    print(f"[WARN] OpenRouter API returned error/no choices: {data}")
-                    time.sleep(2)
-            else:
-                print(f"[WARN] OpenRouter status {resp.status_code}: {resp.text}")
-                time.sleep(2)
         except Exception as e:
-            print(f"[WARN] OpenRouter API call failed (attempt {attempt+1}): {e}")
-            time.sleep(2)
+            print(f"[WARN] OpenRouter model '{current_model}' failed: {e}")
 
     return None
 
@@ -421,9 +421,7 @@ async def process_post(client, db_conn, article, dry_run=False):
     # 1. Scrape webpage
     media_url, page_text = scrape_webpage(link)
     if not media_url:
-        print(f"Skipping article '{title}' because no media image was found.")
-        record_posted(db_conn, link, title)
-        return False
+        print(f"No media image for '{title}'. Proceeding with text news post.")
         
     article_text = page_text if len(page_text) > 50 else description
     
@@ -431,11 +429,6 @@ async def process_post(client, db_conn, article, dry_run=False):
     tweet_text = call_openrouter(title, article_text, source, author, category)
     if not tweet_text:
         print(f"Skipping article '{title}' because AI text generation failed.")
-        return False
-        
-    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
-    if x_premium and len(tweet_text) < 250:
-        print(f"Skipping article '{title}' because generated post was too short ({len(tweet_text)} chars).")
         return False
         
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
