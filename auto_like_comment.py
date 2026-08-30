@@ -323,33 +323,20 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
     successful_replies = 0
     max_replies_to_post = 3 if test_mode else 5
 
-    TARGET_USERS = {
-        "TechCrunch": "816653",
-        "MKBHD": "29873662",
-        "SaharaReporters": "14937748",
-        "PulseNigeria": "129580459",
-        "WIRED": "1344951",
-        "Verge": "27568658",
-        "Engadget": "14372481"
-    }
-
     tweets = []
-    print("Fetching tweets from target account timelines...")
-    for name, user_id in TARGET_USERS.items():
-        deduplicate_cookies(client)
-        try:
-            user_tweets = await client.get_user_tweets(user_id, 'Tweets', count=5)
-            if user_tweets:
-                print(f"Fetched {len(user_tweets)} tweets from @{name}")
-                tweets.extend(user_tweets)
-        except Exception as e:
-            print(f"Failed to fetch timeline for @{name}: {e}")
+    print("Fetching tweets from your FYP / Home Timeline...")
+    deduplicate_cookies(client)
+    try:
+        timeline_tweets = await client.get_timeline(count=35)
+        if timeline_tweets:
+            tweets = list(timeline_tweets)
+            print(f"Fetched {len(tweets)} tweets directly from FYP / Home Timeline!")
+    except Exception as e:
+        print(f"Failed to fetch FYP timeline: {e}")
 
-    # Shuffle the gathered tweets to randomize the mix of tech, AI, and business
-    random.shuffle(tweets)
-    print(f"Total tweets gathered for evaluation: {len(tweets)}")
+    print(f"Total FYP tweets gathered for evaluation: {len(tweets)}")
     if not tweets:
-        print("No tweets found matching any of the queries.")
+        print("No tweets found on FYP / Home Timeline.")
         db_conn.close()
         return
 

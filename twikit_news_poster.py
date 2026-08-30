@@ -111,41 +111,22 @@ CATEGORIES = {
     "Tech": "TECH"
 }
 
-# 23 Sources remaining after cleanup
+# 100% Direct Native Publisher RSS Feeds (No Google News links)
 SOURCES = [
-    # --- WIRE / AGGREGATORS (fastest) ---
     {"category": "Breaking", "source": "BBC Africa", "url": "http://feeds.bbci.co.uk/news/world/africa/rss.xml"},
-    {"category": "General", "source": "Google News Nigeria", "url": "https://news.google.com/rss/search?q=Nigeria&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Tech", "source": "Google News NaijaTech", "url": "https://news.google.com/rss/search?q=Nigeria+tech+startup+fintech&hl=en-NG&gl=NG&ceid=NG:en"},
-    
-    # --- GENERAL NEWS ---
+    {"category": "General", "source": "Daily Post Nigeria", "url": "https://dailypost.ng/feed/"},
     {"category": "General", "source": "Nairametrics", "url": "https://nairametrics.com/feed/"},
     {"category": "General", "source": "Punch Nigeria", "url": "https://punchng.com/feed/"},
-    {"category": "General", "source": "Vanguard", "url": "https://www.vanguardngr.com/feed/"},
-    {"category": "General", "source": "Daily Post", "url": "https://dailypost.ng/feed/"},
-    {"category": "General", "source": "Legit.ng", "url": "https://news.google.com/rss/search?q=site:legit.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "Premium Times", "url": "https://news.google.com/rss/search?q=site:premiumtimesng.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "Sahara Reporters", "url": "https://news.google.com/rss/search?q=site:saharareporters.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "PM News Nigeria", "url": "https://news.google.com/rss/search?q=site:pmnewsnigeria.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "News Online Nigeria", "url": "https://news.google.com/rss/search?q=site:newsonline.com.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "General", "source": "News About Nigeria", "url": "https://news.google.com/rss/search?q=site:newsaboutnigeria.com&hl=en-NG&gl=NG&ceid=NG:en"},
-
-    # --- POLITICS ---
-    {"category": "Politics", "source": "The Nation", "url": "https://news.google.com/rss/search?q=site:thenationonlineng.net&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "Guardian Nigeria", "url": "https://news.google.com/rss/search?q=site:guardian.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "The Cable", "url": "https://news.google.com/rss/search?q=site:thecable.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "Nigerian Tribune", "url": "https://news.google.com/rss/search?q=site:tribuneonlineng.com&hl=en-NG&gl=NG&ceid=NG:en"},
-    {"category": "Politics", "source": "Daily Report Nigeria", "url": "https://news.google.com/rss/search?q=site:dailyreport.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-
-    # --- ENTERTAINMENT / VIRAL ---
-    {"category": "Entertainment", "source": "Pulse Nigeria", "url": "https://news.google.com/rss/search?q=site:pulse.ng&hl=en-NG&gl=NG&ceid=NG:en"},
-
-    # --- SPORTS ---
+    {"category": "General", "source": "Vanguard News", "url": "https://www.vanguardngr.com/feed/"},
+    {"category": "General", "source": "Premium Times", "url": "https://www.premiumtimesng.com/feed"},
+    {"category": "General", "source": "Sahara Reporters", "url": "https://saharareporters.com/feed/"},
+    {"category": "General", "source": "PM News Nigeria", "url": "https://pmnewsnigeria.com/feed/"},
+    {"category": "Politics", "source": "The Nation", "url": "https://thenationonlineng.net/feed/"},
+    {"category": "Politics", "source": "Guardian Nigeria", "url": "https://guardian.ng/feed/"},
+    {"category": "Politics", "source": "The Cable", "url": "https://www.thecable.ng/feed/"},
+    {"category": "Politics", "source": "Nigerian Tribune", "url": "https://tribuneonlineng.com/feed/"},
+    {"category": "Entertainment", "source": "Pulse Nigeria", "url": "https://www.pulse.ng/rss"},
     {"category": "Sports", "source": "Complete Sports", "url": "https://www.completesports.com/feed/"},
-    {"category": "Sports", "source": "Goal Nigeria", "url": "https://news.google.com/rss/search?q=site:goal.com/en-ng&hl=en-NG&gl=NG&ceid=NG:en"},
-
-    # --- TECH ---
-    {"category": "Tech", "source": "Techpoint Africa", "url": "https://techpoint.africa/feed/"},
     {"category": "Tech", "source": "TechCabal", "url": "https://techcabal.com/feed/"}
 ]
 
@@ -241,11 +222,6 @@ def unwrap_google_news_url(url):
                         return clean_u
             except Exception:
                 pass
-                
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, allow_redirects=True, timeout=6)
-        if resp.url and "google.com" not in resp.url:
-            return resp.url
     except Exception:
         pass
         
@@ -508,9 +484,10 @@ async def process_post(client, db_conn, article, dry_run=False):
             print(f"Media download failed: {e}")
             temp_file_path = None
         
-    # If image download failed or wasn't available, proceed as text-only tweet
+    # Enforce mandatory media image attachment for every news post
     if not temp_file_path or not os.path.exists(temp_file_path):
-        temp_file_path = None
+        print(f"Skipping article '{title}' because media image could not be downloaded or was not found.")
+        return False
 
     # 4. Post to Twitter
     if dry_run:
@@ -542,9 +519,8 @@ async def process_post(client, db_conn, article, dry_run=False):
             )
             print("Tweet posted successfully!")
         except Exception as post_err:
-            if is_note and "344" not in str(post_err):
+            if is_note:
                 print(f"Long-form note tweet failed ({post_err}). Retrying with trimmed standard tweet...")
-                # Trim to fit 280 characters
                 short_text = formatted_tweet[:270] + "..."
                 await client.create_tweet(
                     text=short_text,
