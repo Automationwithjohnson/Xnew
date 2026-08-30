@@ -252,39 +252,27 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
     successful_replies = 0
     max_replies_to_post = 3 if test_mode else 5
 
-    TARGET_ACCOUNTS = [
-        "nairametrics",
-        "TechCrunch",
-        "PunchNewspapers",
-        "saharareporters",
-        "PulseNigeria247",
-        "DailyPostNGR",
-        "businessdayng",
-        "mkbhd"
-    ]
+    TARGET_USERS = {
+        "TechCrunch": "816653",
+        "MKBHD": "29873662",
+        "SaharaReporters": "14937748",
+        "PulseNigeria": "129580459",
+        "WIRED": "1344951",
+        "Verge": "27568658",
+        "Engadget": "14372481"
+    }
 
     tweets = []
     print("Fetching tweets from target account timelines...")
-    for username in TARGET_ACCOUNTS:
+    for name, user_id in TARGET_USERS.items():
         deduplicate_cookies(client)
         try:
-            user = await client.get_user_by_screen_name(username)
-            user_tweets = await user.get_tweets('Tweets', count=5)
-            print(f"Fetched {len(user_tweets)} tweets from @{username}")
-            tweets.extend(user_tweets)
+            user_tweets = await client.get_user_tweets(user_id, 'Tweets', count=5)
+            if user_tweets:
+                print(f"Fetched {len(user_tweets)} tweets from @{name}")
+                tweets.extend(user_tweets)
         except Exception as e:
-            print(f"Failed to fetch timeline for @{username}: {e}")
-
-    if len(tweets) < 5:
-        print("Fetching backup search queries...")
-        for query in SEARCH_QUERIES:
-            deduplicate_cookies(client)
-            try:
-                results = await client.search_tweet(query, 'Latest', count=5)
-                print(f"Found {len(results)} tweets for query '{query}'")
-                tweets.extend(results)
-            except Exception as e:
-                print(f"Search query failed for '{query}': {e}")
+            print(f"Failed to fetch timeline for @{name}: {e}")
 
     # Shuffle the gathered tweets to randomize the mix of tech, AI, and business
     random.shuffle(tweets)
