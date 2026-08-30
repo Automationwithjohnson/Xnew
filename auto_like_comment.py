@@ -196,67 +196,68 @@ Here is the X post:
         "X-Title": "AutomatesWithJohnson Auto Commenter"
     }
     
-    model_to_use = MODEL
-    
-    payloads_to_try = []
-    # Try multimodal payload if image exists
-    if image_path:
-        try:
-            base64_image = get_base64_image(image_path)
-            payloads_to_try.append({
-                "model": "google/gemini-2.5-flash",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                        ]
-                    }
-                ]
-            })
-        except Exception as e:
-            print(f"Base64 image encoding failed, falling back to text: {e}")
-            
-    # Always include text-only payload as primary or fallback
-    payloads_to_try.append({
-        "model": model_to_use,
-        "messages": [{"role": "user", "content": prompt}]
-    })
+    fallback_models = [
+        "meta-llama/llama-3.3-70b-instruct",
+        "google/gemini-2.5-flash",
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-chat"
+    ]
+    if MODEL and MODEL not in fallback_models:
+        fallback_models.insert(0, MODEL)
+        
+    for current_model in fallback_models:
+        payloads_to_try = []
+        if image_path:
+            try:
+                base64_image = get_base64_image(image_path)
+                payloads_to_try.append({
+                    "model": current_model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                            ]
+                        }
+                    ]
+                })
+            except Exception:
+                pass
+                
+        payloads_to_try.append({
+            "model": current_model,
+            "messages": [{"role": "user", "content": prompt}]
+        })
 
-    for payload in payloads_to_try:
-        try:
-            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=40)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    msg = data["choices"][0].get("message", {})
-                    content = (msg.get("content") or "").strip()
-                    if content:
-                        # Clean up inner monologue or headers
-                        lower_content = content.lower()
-                        markers = [
-                            "here is my reply:",
-                            "here's my reply:",
-                            "here is the reply:",
-                            "here's the reply:",
-                            "my reply:",
-                            "reply:"
-                        ]
-                        for marker in markers:
-                            if marker in lower_content:
-                                idx = lower_content.find(marker)
-                                content = content[idx + len(marker):].strip()
-                                break
-                                
-                        content = content.replace('"', '').strip()
-                        return content
-                else:
-                    print(f"OpenRouter status 200 missing choices: {data}")
-            else:
-                print(f"OpenRouter payload returned status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            print(f"OpenRouter attempt failed: {e}")
+        for payload in payloads_to_try:
+            try:
+                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "choices" in data and len(data["choices"]) > 0:
+                        msg = data["choices"][0].get("message", {})
+                        content = (msg.get("content") or "").strip()
+                        if content:
+                            lower_content = content.lower()
+                            markers = [
+                                "here is my reply:",
+                                "here's my reply:",
+                                "here is the reply:",
+                                "here's the reply:",
+                                "my reply:",
+                                "reply:"
+                            ]
+                            for marker in markers:
+                                if marker in lower_content:
+                                    idx = lower_content.find(marker)
+                                    content = content[idx + len(marker):].strip()
+                                    break
+                                    
+                            content = content.replace('"', '').strip()
+                            return content
+            except Exception as e:
+                print(f"OpenRouter model '{current_model}' failed: {e}")
 
     print("All OpenRouter attempts failed to generate a valid comment.")
     return None
