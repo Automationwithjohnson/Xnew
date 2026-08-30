@@ -28,7 +28,7 @@ load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 # Configuration and Constants (with environment overrides)
 DB_PATH = os.getenv("DB_PATH", os.path.join(SCRIPT_DIR, "posted_links.db"))
 COOKIES_PATH = os.getenv("COOKIES_PATH", os.path.join(SCRIPT_DIR, "Xaccountdata.json"))
-WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "5"))
+WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "720"))
 MEMORY_HOURS = 2
 
 # Categories matching the old workflow
@@ -548,8 +548,40 @@ async def main():
             
     print(f"\nTotal new articles found: {len(new_articles)}")
     
+    if not new_articles and not bypass_time_window:
+        print(f"No new articles in the last {WINDOW_MINUTES} minutes. Running fallback pass across all recent articles...")
+        for src in SOURCES:
+            try:
+                resp = requests.get(src["url"], headers=headers, timeout=15)
+                if resp.status_code != 200:
+                    continue
+                feed = feedparser.parse(resp.content)
+                for entry in feed.entries:
+                    link = entry.get("link")
+                    title = entry.get("title")
+                    if not link or not title:
+                        continue
+                    cleaned_title = clean_text(title)
+                    if is_duplicate_news(db_conn, link.strip(), cleaned_title):
+                        continue
+                    description = entry.get("summary") or entry.get("description") or ""
+                    author = entry.get("author") or entry.get("creator") or entry.get("dc:creator") or ""
+                    cleaned_author = clean_text(author)
+                    if cleaned_author.isdigit():
+                        cleaned_author = ""
+                    new_articles.append({
+                        "title": clean_text(title),
+                        "link": link.strip(),
+                        "category": src["category"],
+                        "source": src["source"],
+                        "author": cleaned_author,
+                        "description": clean_text(description)
+                    })
+            except Exception:
+                pass
+
     if not new_articles:
-        print(f"No new articles in the last {WINDOW_MINUTES} minutes.")
+        print(f"No unposted articles available across all sources.")
         db_conn.close()
         return
 

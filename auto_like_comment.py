@@ -31,7 +31,7 @@ DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
-MIN_REPLIES = 2  # Only reply if it already has this many comments
+MIN_REPLIES = 0  # Reply to any target post matching queries
 SEARCH_QUERIES = [
     "tech OR technology OR AI OR LLM filter:images",
     "business OR finance OR startup OR economy filter:images",

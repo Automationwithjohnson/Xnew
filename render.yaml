@@ -16,4 +16,4 @@ services:
       - key: MAX_TWEET_LENGTH
         value: "1500"
       - key: WINDOW_MINUTES
-        value: "30"
+        value: "720"
