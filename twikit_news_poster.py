@@ -472,10 +472,9 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"Media download failed: {e}")
         temp_file_path = None
         
+    # If image download failed or wasn't available, proceed as text-only tweet
     if not temp_file_path or not os.path.exists(temp_file_path):
-        print(f"Skipping article '{title}' because the media image could not be downloaded.")
-        record_posted(db_conn, link, title)
-        return False
+        temp_file_path = None
 
     # 4. Post to Twitter
     if dry_run:
