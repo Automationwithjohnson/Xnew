@@ -1,9 +1,9 @@
 services:
-  - type: worker
-    name: news-for-x-worker
+  - type: web
+    name: newsforx
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python -u run_all_render.py
+    startCommand: python -u server.py
     envVars:
       - key: OPENROUTER_API_KEY
         sync: false
