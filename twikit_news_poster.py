@@ -432,6 +432,7 @@ async def process_post(client, db_conn, article, dry_run=False):
         return False
         
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
+    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
     max_total_len = int(os.getenv("MAX_TWEET_LENGTH", "1500")) if x_premium else 280
     
     overhead = len(source_line) + len(link) + 8
