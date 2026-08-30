@@ -202,18 +202,19 @@ async def setup_twitter_client():
     with open(cookies_file, "r", encoding="utf-8") as f:
         cookies_data = json.load(f)
         
+    formatted_cookies = {}
     if isinstance(cookies_data, list):
-        formatted_cookies = {}
         for cookie in cookies_data:
             name = cookie.get("name")
             value = cookie.get("value")
-            if name and value:
+            if name and value and name not in formatted_cookies:
                 formatted_cookies[name] = str(value)
-        client.set_cookies(formatted_cookies, clear_cookies=True)
     elif isinstance(cookies_data, dict):
-        client.set_cookies(cookies_data, clear_cookies=True)
-    else:
-        client.load_cookies(cookies_file)
+        formatted_cookies = {k: str(v) for k, v in cookies_data.items()}
+
+    client.http.cookies.clear()
+    for name, val in formatted_cookies.items():
+        client.http.cookies.set(name, val, domain=".x.com")
         
     return client
 
@@ -222,8 +223,11 @@ def deduplicate_cookies(client):
     try:
         clean_dict = {}
         for name, value in client.http.cookies.items():
-            clean_dict[name] = str(value)
-        client.set_cookies(clean_dict, clear_cookies=True)
+            if name not in clean_dict:
+                clean_dict[name] = str(value)
+        client.http.cookies.clear()
+        for name, val in clean_dict.items():
+            client.http.cookies.set(name, val, domain=".x.com")
     except Exception:
         pass
 
