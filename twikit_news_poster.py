@@ -28,6 +28,12 @@ def safe_user_init(self, client, data: dict) -> None:
     _original_user_init(self, client, data)
 
 twikit.user.User.__init__ = safe_user_init
+
+async def dummy_init(self, *args, **kwargs):
+    self.key = "1234567890"
+    self.key_bytes = [0] * 16
+
+twikit.x_client_transaction.ClientTransaction.init = dummy_init
 twikit.x_client_transaction.ClientTransaction.generate_transaction_id = lambda *args, **kwargs: "1234567890"
 from dotenv import load_dotenv
 
