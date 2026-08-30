@@ -217,16 +217,26 @@ async def setup_twitter_client():
         
     return client
 
+def deduplicate_cookies(client):
+    """Cleanly purge duplicate cookie entries from HTTP client headers"""
+    try:
+        clean_dict = {}
+        for name, value in client.http.cookies.items():
+            clean_dict[name] = str(value)
+        client.set_cookies(clean_dict, clear_cookies=True)
+    except Exception:
+        pass
+
 async def run_commenter_batch(test_mode=False, now_mode=False):
     db_conn = setup_database()
     
     try:
         client = await setup_twitter_client()
-        my_username = os.getenv("MY_USERNAME", "AlayeCodes")
-        my_id = os.getenv("MY_ID", "2025200557")
-        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
+        user_info = await client.user()
+        my_id = user_info.id
+        print(f"Twitter client initialized for @{user_info.screen_name} (ID: {my_id})")
     except Exception as e:
-        print(f"Twitter login failed: {e}")
+        print(f"Failed to initialize Twitter client: {e}")
         db_conn.close()
         return
 
@@ -236,12 +246,9 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
 
     tweets = []
     for query in SEARCH_QUERIES:
-        # Reset the client transaction state if a previous request left it half-initialized
+        deduplicate_cookies(client)
         if hasattr(client, 'client_transaction'):
-            ct = client.client_transaction
-            if ct.home_page_response and not hasattr(ct, 'key'):
-                print("Detected half-initialized client transaction. Resetting transaction state...")
-                ct.home_page_response = None
+            client.client_transaction.home_page_response = None
                 
         print(f"Searching X for Top posts matching: '{query}'...")
         try:
@@ -249,9 +256,17 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
             print(f"Found {len(results)} tweets for query '{query}'")
             tweets.extend(results)
         except Exception as e:
-            print(f"Failed to fetch search results for query '{query}': {e}")
+            print(f"Top search failed for '{query}': {e}. Retrying with Latest search...")
+            deduplicate_cookies(client)
             if hasattr(client, 'client_transaction'):
                 client.client_transaction.home_page_response = None
+            try:
+                simple_query = query.replace(" filter:images", "")
+                results = await client.search_tweet(simple_query, 'Latest', count=10)
+                print(f"Found {len(results)} tweets for fallback query '{simple_query}'")
+                tweets.extend(results)
+            except Exception as e2:
+                print(f"Fallback search also failed for '{query}': {e2}")
 
     # Shuffle the gathered tweets to randomize the mix of tech, AI, and business
     random.shuffle(tweets)
