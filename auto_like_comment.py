@@ -248,29 +248,39 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
     successful_replies = 0
     max_replies_to_post = 3 if test_mode else 5
 
+    TARGET_ACCOUNTS = [
+        "nairametrics",
+        "TechCrunch",
+        "PunchNewspapers",
+        "saharareporters",
+        "PulseNigeria247",
+        "DailyPostNGR",
+        "businessdayng",
+        "mkbhd"
+    ]
+
     tweets = []
-    for query in SEARCH_QUERIES:
+    print("Fetching tweets from target account timelines...")
+    for username in TARGET_ACCOUNTS:
         deduplicate_cookies(client)
-        if hasattr(client, 'client_transaction'):
-            client.client_transaction.home_page_response = None
-                
-        print(f"Searching X for Top posts matching: '{query}'...")
         try:
-            results = await client.search_tweet(query, 'Top', count=10)
-            print(f"Found {len(results)} tweets for query '{query}'")
-            tweets.extend(results)
+            user = await client.get_user_by_screen_name(username)
+            user_tweets = await user.get_tweets('Tweets', count=5)
+            print(f"Fetched {len(user_tweets)} tweets from @{username}")
+            tweets.extend(user_tweets)
         except Exception as e:
-            print(f"Top search failed for '{query}': {e}. Retrying with Latest search...")
+            print(f"Failed to fetch timeline for @{username}: {e}")
+
+    if len(tweets) < 5:
+        print("Fetching backup search queries...")
+        for query in SEARCH_QUERIES:
             deduplicate_cookies(client)
-            if hasattr(client, 'client_transaction'):
-                client.client_transaction.home_page_response = None
             try:
-                simple_query = query.replace(" filter:images", "")
-                results = await client.search_tweet(simple_query, 'Latest', count=10)
-                print(f"Found {len(results)} tweets for fallback query '{simple_query}'")
+                results = await client.search_tweet(query, 'Latest', count=5)
+                print(f"Found {len(results)} tweets for query '{query}'")
                 tweets.extend(results)
-            except Exception as e2:
-                print(f"Fallback search also failed for '{query}': {e2}")
+            except Exception as e:
+                print(f"Search query failed for '{query}': {e}")
 
     # Shuffle the gathered tweets to randomize the mix of tech, AI, and business
     random.shuffle(tweets)
