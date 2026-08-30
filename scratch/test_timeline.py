@@ -1,16 +1,31 @@
 import json
 import asyncio
+import twikit.user
 from twikit import Client
 
+_original_user_init = twikit.user.User.__init__
+
+def safe_user_init(self, client, data: dict) -> None:
+    if isinstance(data, dict):
+        legacy = data.get('legacy') or {}
+        data['legacy'] = legacy
+        entities = legacy.get('entities') or {}
+        legacy['entities'] = entities
+        url_obj = entities.get('url') or {}
+        entities['url'] = url_obj
+    _original_user_init(self, client, data)
+
+twikit.user.User.__init__ = safe_user_init
+
 TARGET_USERS = {
+    "Nairametrics": "14545084",
     "TechCrunch": "816653",
-    "MKBHD": "29873662",
+    "PunchNewspapers": "125740450",
     "SaharaReporters": "14937748",
     "PulseNigeria": "129580459",
-    "Forbes": "9120152",
-    "WIRED": "1344951",
-    "Verge": "27568658",
-    "Engadget": "14372481"
+    "DailyPost": "504068305",
+    "BusinessDay": "41995808",
+    "MKBHD": "29873662"
 }
 
 async def main():
@@ -21,6 +36,9 @@ async def main():
     for k, v in fc.items():
         c.http.cookies.set(k, v, domain='.x.com')
         
+    if hasattr(c, 'client_transaction'):
+        c.client_transaction.generate_transaction_id = lambda *args, **kwargs: "1234567890"
+
     all_tweets = []
     for name, user_id in TARGET_USERS.items():
         try:

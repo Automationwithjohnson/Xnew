@@ -12,6 +12,21 @@ from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from twikit import Client
+import twikit.user
+
+_original_user_init = twikit.user.User.__init__
+
+def safe_user_init(self, client, data: dict) -> None:
+    if isinstance(data, dict):
+        legacy = data.get('legacy') or {}
+        data['legacy'] = legacy
+        entities = legacy.get('entities') or {}
+        legacy['entities'] = entities
+        url_obj = entities.get('url') or {}
+        entities['url'] = url_obj
+    _original_user_init(self, client, data)
+
+twikit.user.User.__init__ = safe_user_init
 
 # Reconfigure stdout/stderr to use UTF-8 to prevent console crashes
 try:
