@@ -98,7 +98,7 @@ load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 # Configuration and Constants (with environment overrides)
 DB_PATH = os.getenv("DB_PATH", os.path.join(SCRIPT_DIR, "posted_links.db"))
 COOKIES_PATH = os.getenv("COOKIES_PATH", os.path.join(SCRIPT_DIR, "Xaccountdata.json"))
-WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "720"))
+WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "5"))
 MEMORY_HOURS = 2
 
 # Categories matching the old workflow
@@ -144,7 +144,6 @@ def setup_database():
             posted_at REAL
         )
     """)
-    # Migration in case table existed without the title column
     try:
         cursor.execute("ALTER TABLE posted ADD COLUMN title TEXT")
     except sqlite3.OperationalError:
@@ -159,16 +158,23 @@ def cleanup_database(conn):
     cursor.execute("DELETE FROM posted WHERE posted_at < ?", (cutoff_time,))
     conn.commit()
 
-def is_similar_title(t1, t2, threshold=0.45):
-    """Determine if two titles represent the same news story based on token overlap"""
+def is_similar_title(t1, t2, threshold=0.35):
+    """Determine if two titles represent the same news story across outlets based on token overlap & entities"""
     import re
     clean = lambda t: re.sub(r'[^a-z0-9\s]', '', t.lower())
-    w1 = set(w for w in clean(t1).split() if len(w) > 3)
-    w2 = set(w for w in clean(t2).split() if len(w) > 3)
+    stopwords = {"says", "tells", "over", "with", "from", "after", "again", "about", "that", "this", "have", "will", "been", "first", "more", "news", "report"}
+    w1 = set(w for w in clean(t1).split() if len(w) > 2 and w not in stopwords)
+    w2 = set(w for w in clean(t2).split() if len(w) > 2 and w not in stopwords)
     if not w1 or not w2:
         return False
     overlap = len(w1.intersection(w2)) / min(len(w1), len(w2))
-    return overlap >= threshold
+    if overlap >= threshold:
+        return True
+    shared = w1.intersection(w2)
+    sig_words = [w for w in shared if len(w) >= 4]
+    if len(sig_words) >= 2:
+        return True
+    return False
 
 def is_duplicate_news(conn, link, title):
     """Check if the link is posted OR if a similar title was posted recently (last 24 hours)"""
@@ -259,7 +265,10 @@ def scrape_webpage(url):
                     "/logo.", "vanguardngr.com/wp-content/uploads/",
                     "googleusercontent.com", "google.com", "gstatic.com",
                     "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
-                    "default_image", "no-image", "site-logo"
+                    "default_image", "no-image", "site-logo", "party-logo",
+                    "pdp-logo", "apc-logo", "adc-logo", "coat-of-arms", "flag-of",
+                    "graphic-logo", "banner-logo", "vector-logo", "badge-logo",
+                    "party_logo", "apc_logo", "pdp_logo", "adc_logo"
                 ]
                 is_generic = any(kw in img_candidate.lower() for kw in generic_keywords)
                 if not is_generic:
@@ -300,14 +309,10 @@ def call_openrouter(title, text, source, author, category):
         return None
         
     model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
-    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
     
-    if x_premium:
-        limit_rule = """Strict Length & Finishing Constraint:
-- Write between 500 and 850 characters total (approx. 2 to 4 full paragraphs).
+    limit_rule = """Strict Length & Finishing Constraint:
+- Write a short headline and a concise 1-2 sentence commentary. The ENTIRE response (Headline + Body) MUST be under 170 characters total.
 - CRITICAL: You MUST finish your final sentence completely. Never leave any sentence cut off or unfinished."""
-    else:
-        limit_rule = "Length Constraint: The entire response MUST be under 220 characters."
     
     prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of tech, finance, politics, sports, and business. Your writing style is conversational, insightful, and slightly opinionated. Write like a knowledgeable insider explaining the news on X.
 
@@ -442,23 +447,27 @@ async def process_post(client, db_conn, article, dry_run=False):
         return False
         
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
-    x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
-    max_total_len = int(os.getenv("MAX_TWEET_LENGTH", "1500")) if x_premium else 280
     
-    overhead = len(source_line) + len(link) + 8
-    max_body_len = max_total_len - overhead
+    # Standard Twitter 280-char limit (Links count as 23 chars on X)
+    link_len_on_x = 23 if link.startswith("http") else len(link)
+    overhead = len(source_line) + link_len_on_x + 6
+    max_body_len = max(80, 280 - overhead)
     
     if len(tweet_text) > max_body_len:
-        print(f"[Warning] Drafted text body ({len(tweet_text)} chars) exceeds limit ({max_body_len} chars). Truncating at last full sentence.")
+        print(f"[Warning] Drafted text body ({len(tweet_text)} chars) exceeds limit ({max_body_len} chars). Truncating cleanly.")
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
-        if last_dot > 200:
+        if last_dot > 60:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
-            tweet_text = truncated.strip()
+            last_space = truncated.rfind(' ')
+            if last_space > 40:
+                tweet_text = truncated[:last_space].strip() + "."
+            else:
+                tweet_text = truncated.strip() + "."
         
     formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
-    print(f"Drafted Tweet:\n{formatted_tweet}")
+    print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
     
     # 3. Download media
     temp_file_path = None
@@ -508,28 +517,12 @@ async def process_post(client, db_conn, article, dry_run=False):
             media_ids = [media_id]
             print(f"Media uploaded. ID: {media_id}")
             
-        x_premium = os.getenv("X_PREMIUM", "true").lower() in ("true", "1", "yes")
-        is_note = len(formatted_tweet) > 280
-        
-        try:
-            await client.create_tweet(
-                text=formatted_tweet,
-                media_ids=media_ids if media_ids else None,
-                is_note_tweet=is_note
-            )
-            print("Tweet posted successfully!")
-        except Exception as post_err:
-            if is_note:
-                print(f"Long-form note tweet failed ({post_err}). Retrying with trimmed standard tweet...")
-                short_text = formatted_tweet[:270] + "..."
-                await client.create_tweet(
-                    text=short_text,
-                    media_ids=media_ids if media_ids else None,
-                    is_note_tweet=False
-                )
-                print("Trimmed tweet posted successfully!")
-            else:
-                raise post_err
+        await client.create_tweet(
+            text=formatted_tweet,
+            media_ids=media_ids if media_ids else None,
+            is_note_tweet=False
+        )
+        print("Tweet posted successfully!")
         
         record_posted(db_conn, link, title)
         return True
