@@ -311,7 +311,7 @@ def call_openrouter(title, text, source, author, category):
     model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     
     limit_rule = """Strict Length & Finishing Constraint:
-- Total Response (Headline Title + Commentary Body) MUST be between 160 and 200 characters total.
+- Total Response (Headline Title + Commentary Body) MUST be between 420 and 550 characters total (approx. 1 rich paragraph).
 - CRITICAL: Every sentence MUST be completely finished with a period. Never leave any sentence cut off or unfinished."""
     
     prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of tech, finance, politics, sports, and business. Your writing style is conversational, insightful, and slightly opinionated. Write like a knowledgeable insider explaining the news on X.
@@ -448,28 +448,32 @@ async def process_post(client, db_conn, article, dry_run=False):
         
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
     
-    # Calculate exact character budget for standard 280-char X post
+    # Calculate exact character budget for [500, 650] bounds
     link_len_on_x = 23 if link.startswith("http") else len(link)
     overhead = len(source_line) + link_len_on_x + 6  # 6 chars for newlines
-    max_body_len = max(90, 275 - overhead)
+    max_body_len = max(350, 645 - overhead)
     
     if len(tweet_text) > max_body_len:
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
-        if last_dot > 60:
+        if last_dot > 300:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             last_space = truncated.rfind(' ')
-            if last_space > 40:
+            if last_space > 250:
                 tweet_text = truncated[:last_space].strip() + "."
             else:
                 tweet_text = truncated.strip() + "."
                 
     formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
     
-    # Strict Minimum & Maximum Length Guards
-    if len(formatted_tweet) < 200:
-        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum threshold of 200 chars.")
+    # STRICT ENFORCEMENT: MINIMUM 500 TO MAXIMUM 650 CHARACTERS TOTAL
+    if len(formatted_tweet) < 500:
+        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below mandatory minimum of 500 chars.")
+        return False
+        
+    if len(formatted_tweet) > 650:
+        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) exceeds mandatory maximum of 650 chars.")
         return False
         
     print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
@@ -522,10 +526,11 @@ async def process_post(client, db_conn, article, dry_run=False):
             media_ids = [media_id]
             print(f"Media uploaded. ID: {media_id}")
             
+        is_note = len(formatted_tweet) > 280
         await client.create_tweet(
             text=formatted_tweet,
             media_ids=media_ids if media_ids else None,
-            is_note_tweet=False
+            is_note_tweet=is_note
         )
         print("Tweet posted successfully!")
         
