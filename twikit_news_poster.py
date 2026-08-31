@@ -447,33 +447,53 @@ async def process_post(client, db_conn, article, dry_run=False):
         return False
         
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
-    
-    # Calculate exact character budget for [500, 650] bounds
     link_len_on_x = 23 if link.startswith("http") else len(link)
-    overhead = len(source_line) + link_len_on_x + 6  # 6 chars for newlines
-    max_body_len = max(350, 645 - overhead)
+    overhead = len(source_line) + link_len_on_x + 6  # newlines
     
+    max_body_len = max(350, 640 - overhead)
+    min_body_len = max(250, 500 - overhead)
+    
+    # 1. Truncate if body is too long
     if len(tweet_text) > max_body_len:
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
-        if last_dot > 300:
+        if last_dot > 250:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             last_space = truncated.rfind(' ')
-            if last_space > 250:
+            if last_space > 200:
                 tweet_text = truncated[:last_space].strip() + "."
             else:
                 tweet_text = truncated.strip() + "."
-                
+
+    # 2. Pad from article_text if body is too short
+    if len(tweet_text) < min_body_len and article_text:
+        extra_sentences = [s.strip() for s in article_text.split('.') if len(s.strip()) > 15]
+        for sentence in extra_sentences:
+            if sentence in tweet_text:
+                continue
+            candidate = f"{tweet_text} {sentence}."
+            if len(candidate) <= max_body_len:
+                tweet_text = candidate
+            if len(tweet_text) >= min_body_len:
+                break
+
     formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
     
-    # STRICT ENFORCEMENT: MINIMUM 500 TO MAXIMUM 650 CHARACTERS TOTAL
-    if len(formatted_tweet) < 500:
-        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below mandatory minimum of 500 chars.")
-        return False
-        
-    if len(formatted_tweet) > 650:
-        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) exceeds mandatory maximum of 650 chars.")
+    # Hard safety check: re-trim if total post exceeds 645 characters
+    if len(formatted_tweet) > 645:
+        max_safe_body = 645 - overhead
+        truncated = tweet_text[:max_safe_body]
+        last_dot = truncated.rfind('.')
+        if last_dot > 250:
+            tweet_text = truncated[:last_dot + 1].strip()
+        else:
+            tweet_text = truncated.strip() + "."
+        formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
+
+    # Final Guard: Skip only if formatted length is under 450 chars after padding
+    if len(formatted_tweet) < 450:
+        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum of 450 chars.")
         return False
         
     print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
