@@ -487,22 +487,23 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"Skipping article '{title}' because AI text generation failed.")
         return False
         
+    # Strip tracking query params from link for clean URLs
+    clean_link = link.split('?')[0] if '?' in link else link
     source_line = f"Via {source}" + (f" | Report by {author}" if author else "")
-    link_len_on_x = 23 if link.startswith("http") else len(link)
-    overhead = len(source_line) + link_len_on_x + 6  # newlines
+    overhead = len(source_line) + len(clean_link) + 6  # newlines
     
-    max_body_len = max(450, 740 - overhead)
-    min_body_len = max(350, 600 - overhead)
+    max_body_len = max(400, 740 - overhead)
+    min_body_len = max(300, 600 - overhead)
     
     # 1. Truncate if body is too long
     if len(tweet_text) > max_body_len:
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
-        if last_dot > 300:
+        if last_dot > 250:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             last_space = truncated.rfind(' ')
-            if last_space > 250:
+            if last_space > 200:
                 tweet_text = truncated[:last_space].strip() + "."
             else:
                 tweet_text = truncated.strip() + "."
@@ -519,18 +520,18 @@ async def process_post(client, db_conn, article, dry_run=False):
             if len(tweet_text) >= min_body_len:
                 break
 
-    formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
+    formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{clean_link}"
     
-    # Hard safety check: re-trim if total post exceeds 745 characters
+    # Hard safety check: re-trim if total raw post exceeds 745 characters
     if len(formatted_tweet) > 745:
         max_safe_body = 745 - overhead
         truncated = tweet_text[:max_safe_body]
         last_dot = truncated.rfind('.')
-        if last_dot > 300:
+        if last_dot > 250:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             tweet_text = truncated.strip() + "."
-        formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
+        formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{clean_link}"
 
     # Final Guard: Skip only if formatted length is under 550 chars after padding
     if len(formatted_tweet) < 550:
