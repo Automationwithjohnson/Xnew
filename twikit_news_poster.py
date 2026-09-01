@@ -392,12 +392,15 @@ Author: {author or 'Unknown'}"""
     }
     
     fallback_models = [
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "google/gemini-2.0-flash-lite-001",
-        "qwen/qwen-2.5-coder-32b-instruct:free",
-        "deepseek/deepseek-r1:free",
-        "mistralai/mistral-7b-instruct:free",
-        "microsoft/phi-3-medium-128k-instruct:free"
+        "nvidia/nemotron-3.5-lightning:free",
+        "inclusionai/ling-3.0-flash-fin:free",
+        "minimax/minimax-m2.7:free",
+        "cohere/north-mini-code:free",
+        "liquid/lfm-2.5-2.6b:free",
+        "poolside/laguna-s-2.1:free",
+        "minimax/minimax-m3:free",
+        "google/gemma-4-31b-it:free",
+        "openrouter/free"
     ]
     if model and model not in fallback_models:
         fallback_models.insert(0, model)
@@ -416,26 +419,16 @@ Author: {author or 'Unknown'}"""
                 if "choices" in data and len(data["choices"]) > 0:
                     ai_text = data["choices"][0]["message"]["content"].strip()
                     if len(ai_text) > 100:
+                        print(f"[SUCCESS] AI text generated via model: {current_model}")
                         return ai_text
             else:
                 print(f"[WARN] OpenRouter model '{current_model}' returned HTTP {resp.status_code}: {resp.text[:150]}")
         except Exception as e:
             print(f"[WARN] OpenRouter model '{current_model}' failed: {e}")
 
-    # SMART LOCAL FALLBACK: Ensure posting never stops even if OpenRouter is completely down/out of credits
-    print("[INFO] OpenRouter models unavailable. Generating smart local news commentary fallback.")
-    fallback_parts = []
-    if quote:
-        fallback_parts.append(f"In an official statement on the matter, officials noted: '{quote}'.")
-    if text:
-        sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 25]
-        for s in sentences:
-            if s not in title and (not quote or s not in quote):
-                fallback_parts.append(f"{s}.")
-                if len(" ".join(fallback_parts)) >= 380:
-                    break
-    fallback_parts.append("What is your perspective on this major development.")
-    return f"{title}\n\n" + " ".join(fallback_parts)
+    # Completely removed local fallback generator as requested
+    print("[ERROR] All OpenRouter models failed. Returning None.")
+    return None
 
 async def setup_twitter_client():
     """Load cookies from standard JSON export and login to X without duplicate cookie conflicts"""
