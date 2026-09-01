@@ -100,7 +100,7 @@ load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 DB_PATH = os.getenv("DB_PATH", os.path.join(SCRIPT_DIR, "posted_links.db"))
 COOKIES_PATH = os.getenv("COOKIES_PATH", os.path.join(SCRIPT_DIR, "Xaccountdata.json"))
 WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "5"))
-MEMORY_HOURS = 2
+MEMORY_HOURS = 18
 
 # Categories matching the old workflow
 CATEGORIES = {
@@ -112,21 +112,17 @@ CATEGORIES = {
     "Tech": "TECH"
 }
 
-# 100% Direct Native Publisher RSS Feeds (No Google News links)
+# 11 Curated Premium Native Publisher RSS Feeds (Cut Pulse, PM News, Tribune, Daily Post)
 SOURCES = [
     {"category": "Breaking", "source": "BBC Africa", "url": "http://feeds.bbci.co.uk/news/world/africa/rss.xml"},
-    {"category": "General", "source": "Daily Post Nigeria", "url": "https://dailypost.ng/feed/"},
     {"category": "General", "source": "Nairametrics", "url": "https://nairametrics.com/feed/"},
     {"category": "General", "source": "Punch Nigeria", "url": "https://punchng.com/feed/"},
     {"category": "General", "source": "Vanguard News", "url": "https://www.vanguardngr.com/feed/"},
     {"category": "General", "source": "Premium Times", "url": "https://www.premiumtimesng.com/feed"},
     {"category": "General", "source": "Sahara Reporters", "url": "https://saharareporters.com/feed/"},
-    {"category": "General", "source": "PM News Nigeria", "url": "https://pmnewsnigeria.com/feed/"},
     {"category": "Politics", "source": "The Nation", "url": "https://thenationonlineng.net/feed/"},
     {"category": "Politics", "source": "Guardian Nigeria", "url": "https://guardian.ng/feed/"},
     {"category": "Politics", "source": "The Cable", "url": "https://www.thecable.ng/feed/"},
-    {"category": "Politics", "source": "Nigerian Tribune", "url": "https://tribuneonlineng.com/feed/"},
-    {"category": "Entertainment", "source": "Pulse Nigeria", "url": "https://www.pulse.ng/rss"},
     {"category": "Sports", "source": "Complete Sports", "url": "https://www.completesports.com/feed/"},
     {"category": "Tech", "source": "TechCabal", "url": "https://techcabal.com/feed/"}
 ]
@@ -153,19 +149,52 @@ def setup_database():
     return conn
 
 def cleanup_database(conn):
-    """Delete database entries older than 2 hours to keep it clean"""
+    """Delete database entries older than 18 hours to keep it clean"""
     cursor = conn.cursor()
     cutoff_time = time.time() - (MEMORY_HOURS * 60 * 60)
     cursor.execute("DELETE FROM posted WHERE posted_at < ?", (cutoff_time,))
     conn.commit()
 
-def is_similar_title(t1, t2, threshold=0.35):
-    """Determine if two titles represent the same news story across outlets based on token overlap & entities"""
-    import re
-    clean = lambda t: re.sub(r'[^a-z0-9\s]', '', t.lower())
-    stopwords = {"says", "tells", "over", "with", "from", "after", "again", "about", "that", "this", "have", "will", "been", "first", "more", "news", "report"}
-    w1 = set(w for w in clean(t1).split() if len(w) > 2 and w not in stopwords)
-    w2 = set(w for w in clean(t2).split() if len(w) > 2 and w not in stopwords)
+def normalize_title(t):
+    """Normalize title for exact and fuzzy deduplication."""
+    if not t:
+        return ""
+    t_clean = re.sub(r'[-|]\s*(Punch|Vanguard|TheCable|Guardian|Sahara Reporters|Premium Times|BBC|The Nation|TechCabal).*$', '', t, flags=re.IGNORECASE)
+    t_clean = re.sub(r'[^a-z0-9\s]', '', t_clean.lower())
+    return t_clean.strip()
+
+def has_new_fact(new_title, old_title):
+    """Check if new_title contains a NEW FACT (new numbers, scores, FX rates, or new entities) compared to old_title."""
+    # Generic prefixes like 'just in', 'update', 'breaking' alone do NOT count as a new fact
+    nums_new = set(re.findall(r'\b\d+(?:\.\d+)?(?:k|m|b|tn|%|bn)?\b', new_title.lower()))
+    nums_old = set(re.findall(r'\b\d+(?:\.\d+)?(?:k|m|b|tn|%|bn)?\b', old_title.lower()))
+    
+    # If new title has numbers/amounts not present in old title -> NEW FACT!
+    new_nums = nums_new - nums_old
+    if new_nums:
+        return True
+        
+    # Extract capitalized proper nouns / entities
+    words_new = set(w for w in re.findall(r'\b[A-Z][a-z]+\b', new_title) if len(w) > 3)
+    words_old = set(w for w in re.findall(r'\b[A-Z][a-z]+\b', old_title) if len(w) > 3)
+    
+    ignore_words = {"Punch", "Vanguard", "TheCable", "Guardian", "Sahara", "Premium", "Times", "Breaking", "Update", "Just", "News", "Report"}
+    words_new -= ignore_words
+    words_old -= ignore_words
+    
+    new_entities = words_new - words_old
+    if len(new_entities) >= 2:
+        return True
+        
+    return False
+
+def is_similar_title(t1, t2, threshold=0.60):
+    """Determine if two titles represent the same news story across outlets based on token overlap & entities."""
+    stopwords = {"says", "tells", "over", "with", "from", "after", "again", "about", "that", "this", "have", "will", "been", "first", "more", "news", "report", "just", "update", "breaking"}
+    c1 = normalize_title(t1)
+    c2 = normalize_title(t2)
+    w1 = set(w for w in c1.split() if len(w) > 2 and w not in stopwords)
+    w2 = set(w for w in c2.split() if len(w) > 2 and w not in stopwords)
     if not w1 or not w2:
         return False
     overlap = len(w1.intersection(w2)) / min(len(w1), len(w2))
@@ -178,23 +207,77 @@ def is_similar_title(t1, t2, threshold=0.35):
     return False
 
 def is_duplicate_news(conn, link, title):
-    """Check if the link is posted OR if a similar title was posted recently (last 24 hours)"""
+    """Check if link was posted OR if a similar title was posted within 18 hours without a new fact."""
     cursor = conn.cursor()
-    # 1. Strict link check
     cursor.execute("SELECT 1 FROM posted WHERE link = ?", (link,))
     if cursor.fetchone() is not None:
         return True
         
-    # 2. Semantic title check against last 24 hours
-    cutoff_time = time.time() - (24 * 60 * 60)
+    cutoff_time = time.time() - (MEMORY_HOURS * 60 * 60)
     cursor.execute("SELECT title FROM posted WHERE posted_at > ? AND title IS NOT NULL", (cutoff_time,))
     rows = cursor.fetchall()
     for row in rows:
         existing_title = row[0]
         if is_similar_title(title, existing_title):
-            print(f"Skipping duplicate news story (Similar to posted: '{existing_title}')")
-            return True
+            if has_new_fact(title, existing_title):
+                print(f"[INFO] Allowing story update for '{title}' (Contains new facts vs '{existing_title}')")
+                return False
+            else:
+                print(f"Skipping duplicate news story (Similar to posted in last 18h: '{existing_title}')")
+                return True
     return False
+
+def is_low_value(title, description, body_text=""):
+    """Filter out sponsored content, ads, betting, listicles, birthdays, routine admin notices, and thin body (<400 chars)."""
+    text_to_check = f"{title} {description}".lower()
+    
+    # 1. Skip promo/ad/filler keywords
+    bad_keywords = [
+        "sponsored", "advert", "advertorial", "partner content", "promoted",
+        "betting", "predict and win", "betting tips", "odds", "horoscope", "lottery",
+        "discount", "how to apply", "how to buy", "press release", "happy birthday",
+        " rip ", "photos:", "in pictures", "see photos", "just in pictures"
+    ]
+    if any(kw in text_to_check for kw in bad_keywords):
+        return True, "Contains ad/promo/filler keyword"
+        
+    # 2. Skip routine admin fluff unless vital national figure/institution is present
+    admin_keywords = ["road closed", "commiserates", "inaugurates", "flags off", "charges youths", "tasks members", "appoints special assistant"]
+    vital_entities = ["tinubu", "cbn", "fg", "presidency", "efcc", "super eagles", "naira", "oil", "court", "supreme court", "dollar", "inec"]
+    if any(ak in text_to_check for ak in admin_keywords):
+        if not any(ve in text_to_check for ve in vital_entities):
+            return True, "Routine local administrative notice"
+            
+    # 3. Skip thin body (<400 chars)
+    if body_text and len(body_text.strip()) < 400:
+        return True, f"Thin body content ({len(body_text.strip())} chars < 400 min)"
+        
+    return False, ""
+
+def score_article(article, body_text=""):
+    """Score article relevance and impact (higher score = posted first)."""
+    text = f"{article.get('title', '')} {article.get('description', '')} {body_text}".lower()
+    score = 0
+    
+    # High Impact Topics (+3)
+    high_impact = ["tinubu", "cbn", "naira", "inflation", "oil", "fuel", "court", "efcc", "inec", "presidency", "super eagles", "afcon", "transfer"]
+    if any(k in text for k in high_impact):
+        score += 3
+        
+    # Medium Impact (+2)
+    med_impact = ["tech", "startup", "funding", "ncc", "police", "senate", "house of reps", "governor"]
+    if any(k in text for k in med_impact):
+        score += 2
+        
+    # Premium Source (+2)
+    if article.get("source") in ["BBC Africa", "Premium Times", "The Cable", "Nairametrics"]:
+        score += 2
+        
+    # Low Value Penalty (-2)
+    if any(k in text for k in ["actor", "actress", "socialite", "bizarre", "drama"]):
+        score -= 2
+        
+    return score
 
 def record_posted(conn, link, title):
     """Save link and title to database to prevent duplicates"""
@@ -477,6 +560,13 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"No media image for '{title}'. Proceeding with text news post.")
         
     article_text = page_text if len(page_text) > 50 else description
+    
+    # Low-value check on scraped body (< 400 chars or filler/ads)
+    skip, reason = is_low_value(title, description, article_text)
+    if skip:
+        print(f"Skipping article '{title}' because it is low-value: {reason}")
+        return False
+
     quote = extract_direct_quote(article_text)
     if quote:
         print(f"Extracted direct quote: '{quote[:70]}...'")
@@ -737,8 +827,8 @@ async def main():
         db_conn.close()
         return
 
-    # Parse limit from arguments (defaults to 4)
-    limit = 4
+    # Parse limit from arguments (defaults to 1 for paced queue execution: 1 post / 10-12 mins)
+    limit = 1
     for arg in sys.argv:
         if arg.startswith("--limit="):
             try:
@@ -746,11 +836,23 @@ async def main():
             except:
                 pass
 
-    # Shuffle list so we don't only process the first source's articles in test/limit runs
-    import random
-    random.shuffle(new_articles)
+    # Filter out preliminary low-value items and sort candidates by news impact score
+    filtered_articles = []
+    for art in new_articles:
+        skip, reason = is_low_value(art["title"], art["description"])
+        if not skip:
+            art["score"] = score_article(art)
+            filtered_articles.append(art)
+            
+    filtered_articles.sort(key=lambda x: x["score"], reverse=True)
+    new_articles = filtered_articles
 
-    print(f"Processing new articles dynamically to reach target limit of {limit} successful posts...")
+    if not new_articles:
+        print("No high-value unposted articles available across all sources.")
+        db_conn.close()
+        return
+
+    print(f"Ranked {len(new_articles)} high-value candidate articles. Target limit: {limit} post(s)...")
     
     twitter_client = None
     if not dry_run:
