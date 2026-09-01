@@ -293,16 +293,31 @@ def scrape_webpage(url):
         
     return media_url, "\n\n".join(paragraphs)
 
-def call_openrouter(title, text, source, author, category):
-    """Query OpenRouter API to draft the tweet in brand voice using deepseek model"""
-    prefix = CATEGORIES.get(category, "BREAKING")
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        print("[Warning] OPENROUTER_API_KEY is not set. Generating mock text.")
-        return f"{prefix}: [Mock AI summary for {title}]"
+def extract_direct_quote(text):
+    """Extract a clean direct quote from scraped article text if available."""
+    if not text:
+        return None
         
-def call_openrouter(title, text, source, author, category):
-    """Query OpenRouter API to draft rich, expanded long-form news posts in brand voice."""
+    # Match double or single quotes "..." or '...' or “...”
+    matches = re.findall(r'["“«]([^"”»]{20,220})["”»]', text)
+    if matches:
+        for m in matches:
+            cleaned = m.strip()
+            if len(cleaned) >= 20 and not any(bad in cleaned.lower() for bad in ["click here", "read more", "copyright", "subscribe", "terms of"]):
+                return cleaned
+                
+    # If no explicit quotation marks, search for attribution verbs
+    quote_verbs = [" said ", " stated ", " declared ", " warned ", " remarked ", " noted ", " added ", " explained ", " asserted "]
+    sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 30]
+    for s in sentences:
+        if any(verb in f" {s.lower()} " for verb in quote_verbs) and len(s) <= 240:
+            if not any(bad in s.lower() for bad in ["click here", "read more", "copyright", "subscribe"]):
+                return s.strip()
+                
+    return None
+
+def call_openrouter(title, text, source, author, category, quote=None):
+    """Query OpenRouter API to draft rich, long-form news posts in brand voice with quote support."""
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("[Warning] OPENROUTER_API_KEY is not set.")
@@ -311,9 +326,19 @@ def call_openrouter(title, text, source, author, category):
     model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     
     limit_rule = """Strict Length & Finishing Constraint:
-- Total Response (Headline Title + Commentary Body) MUST be between 420 and 550 characters total (approx. 1 rich paragraph).
+- Total Response (Headline Title + Commentary Body) MUST be between 520 and 660 characters total (approx. 1 rich, deep paragraph).
 - CRITICAL: Every sentence MUST be completely finished with a period. Never leave any sentence cut off or unfinished."""
     
+    quote_rule = ""
+    if quote:
+        quote_rule = f"""\n### Direct Quote Requirement:
+A direct quote or statement was found in this news story:
+"{quote}"
+You MUST naturally weave this quote (or a clear key excerpt of it) into your commentary body enclosed in single quotes (e.g. He said '{quote}' or As noted '{quote}'). Make sure the quote fits seamlessly within your commentary paragraph."""
+    else:
+        quote_rule = """\n### Direct Quote Handling:
+No direct quote was found in the source article. Write a rich, deep commentary explaining the context, background, and impact naturally without fabricating any fake quotes."""
+
     prompt = f"""You are a sharp, street-smart Nigerian commentator with deep knowledge of tech, finance, politics, sports, and business. Your writing style is conversational, insightful, and slightly opinionated. Write like a knowledgeable insider explaining the news on X.
 
 Your task is to transform raw news inputs (even brief 1-line headlines) into high-quality, rich, engaging X posts that add real value and context.
@@ -323,6 +348,7 @@ Your task is to transform raw news inputs (even brief 1-line headlines) into hig
 1. LINE 1 (Headline Title): Write a strong, clear, catchy Headline Title on the very first line. Do NOT write the word "Title:" or "Headline:". Just write the headline title directly.
 2. LINE 2: Leave a blank line.
 3. LINE 3+: Write the full commentary body explaining what happened, the context, economic/social impact, and your street-smart take.
+{quote_rule}
 
 ### Strict Rules:
 
@@ -439,9 +465,12 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"No media image for '{title}'. Proceeding with text news post.")
         
     article_text = page_text if len(page_text) > 50 else description
-    
+    quote = extract_direct_quote(article_text)
+    if quote:
+        print(f"Extracted direct quote: '{quote[:70]}...'")
+        
     # 2. Get AI tweet text
-    tweet_text = call_openrouter(title, article_text, source, author, category)
+    tweet_text = call_openrouter(title, article_text, source, author, category, quote=quote)
     if not tweet_text:
         print(f"Skipping article '{title}' because AI text generation failed.")
         return False
@@ -450,18 +479,18 @@ async def process_post(client, db_conn, article, dry_run=False):
     link_len_on_x = 23 if link.startswith("http") else len(link)
     overhead = len(source_line) + link_len_on_x + 6  # newlines
     
-    max_body_len = max(350, 640 - overhead)
-    min_body_len = max(250, 500 - overhead)
+    max_body_len = max(450, 740 - overhead)
+    min_body_len = max(350, 600 - overhead)
     
     # 1. Truncate if body is too long
     if len(tweet_text) > max_body_len:
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
-        if last_dot > 250:
+        if last_dot > 300:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             last_space = truncated.rfind(' ')
-            if last_space > 200:
+            if last_space > 250:
                 tweet_text = truncated[:last_space].strip() + "."
             else:
                 tweet_text = truncated.strip() + "."
@@ -480,20 +509,20 @@ async def process_post(client, db_conn, article, dry_run=False):
 
     formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
     
-    # Hard safety check: re-trim if total post exceeds 645 characters
-    if len(formatted_tweet) > 645:
-        max_safe_body = 645 - overhead
+    # Hard safety check: re-trim if total post exceeds 745 characters
+    if len(formatted_tweet) > 745:
+        max_safe_body = 745 - overhead
         truncated = tweet_text[:max_safe_body]
         last_dot = truncated.rfind('.')
-        if last_dot > 250:
+        if last_dot > 300:
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             tweet_text = truncated.strip() + "."
         formatted_tweet = f"{tweet_text}\n\n{source_line}\n\n{link}"
 
-    # Final Guard: Skip only if formatted length is under 450 chars after padding
-    if len(formatted_tweet) < 450:
-        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum of 450 chars.")
+    # Final Guard: Skip only if formatted length is under 550 chars after padding
+    if len(formatted_tweet) < 550:
+        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum of 550 chars.")
         return False
         
     print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
