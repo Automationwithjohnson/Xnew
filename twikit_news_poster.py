@@ -619,9 +619,9 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"Skipping article '{title}' because AI text generation failed.")
         return False
         
-    # Strip tracking query params from link for clean URLs
-    clean_link = link.split('?')[0] if '?' in link else link
-    source_line = f"Source: {source} — {clean_link}"
+    # Strip any URLs from tweet_text and build linkless source line
+    tweet_text = re.sub(r'https?://\S+', '', tweet_text).strip()
+    source_line = f"Source: {source}"
     overhead = len(source_line) + 4  # newlines
     
     max_body_len = max(400, 740 - overhead)
@@ -653,10 +653,16 @@ async def process_post(client, db_conn, article, dry_run=False):
                 break
 
     if "source:" in tweet_text.lower():
+        tweet_text = re.sub(r'https?://\S+', '', tweet_text)
+        tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
         formatted_tweet = tweet_text
     else:
         formatted_tweet = f"{tweet_text}\n\n{source_line}"
     
+    # Ensure no residual URLs or trailing dashes exist in formatted_tweet
+    formatted_tweet = re.sub(r'https?://\S+', '', formatted_tweet)
+    formatted_tweet = re.sub(r'—\s*$', '', formatted_tweet).strip()
+
     # Hard safety check: re-trim if total raw post exceeds 745 characters
     if len(formatted_tweet) > 745:
         max_safe_body = 745 - overhead
@@ -670,6 +676,8 @@ async def process_post(client, db_conn, article, dry_run=False):
             formatted_tweet = tweet_text
         else:
             formatted_tweet = f"{tweet_text}\n\n{source_line}"
+        formatted_tweet = re.sub(r'https?://\S+', '', formatted_tweet)
+        formatted_tweet = re.sub(r'—\s*$', '', formatted_tweet).strip()
 
     # Final Guard: Skip only if formatted length is under 550 chars after padding
     if len(formatted_tweet) < 550:
