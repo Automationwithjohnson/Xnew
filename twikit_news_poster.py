@@ -400,6 +400,32 @@ def extract_direct_quote(text):
                 
     return None
 
+def sanitize_ai_output(text):
+    """Sanitize AI output to remove Chain-of-Thought (CoT) preambles, reasoning steps, or prompt regurgitation."""
+    if not text:
+        return None
+        
+    # 1. Remove <think>...</think> tags
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
+    # 2. Reject if the output is purely internal analysis / CoT preamble
+    if re.search(r"(?i)(Here'?s\s+a\s+thinking\s+process|1\.\s*\*\*Analyze\s+the\s+Request:\*\*|\-\s*\*\*Role:\*\*)", text):
+        parts = re.split(r"(?i)Here'?s\s+a\s+thinking\s+process:?", text)
+        if len(parts) > 1 and len(parts[-1].strip()) > 100 and not re.search(r"(?i)\*\*Analyze", parts[-1]):
+            text = parts[-1].strip()
+        else:
+            return None
+            
+    # 3. Clean up leading markdown formatting if output starts with code fences
+    text = re.sub(r'^```[a-zA-Z]*\n', '', text)
+    text = re.sub(r'\n```$', '', text).strip()
+    
+    # 4. Final validation check
+    if len(text) < 80 or re.search(r"(?i)^(Here'?s\s+a\s+thinking\s+process|1\.\s*\*\*Analyze)", text):
+        return None
+        
+    return text
+
 def call_openrouter(title, text, source, author, category, quote=None):
     """Query OpenRouter API to draft original commentary posts in Alaye | Africa Desk persona."""
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -407,7 +433,7 @@ def call_openrouter(title, text, source, author, category, quote=None):
         print("[Warning] OPENROUTER_API_KEY is not set.")
         return None
         
-    model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+    model = os.getenv("OPENROUTER_MODEL", "nex-agi/nex-n2.5-mini:free")
     
     quote_rule = f"\nDirect Quote in Article: \"{quote}\"" if quote else ""
 
@@ -514,14 +540,13 @@ Write the original commentary X post text now:"""
     }
     
     fallback_models = [
+        "nex-agi/nex-n2.5-mini:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "qwen/qwen-2.5-72b-instruct:free",
+        "google/gemini-2.0-flash-lite-001",
+        "mistralai/mistral-7b-instruct:free",
         "nvidia/nemotron-3.5-lightning:free",
-        "inclusionai/ling-3.0-flash-fin:free",
-        "minimax/minimax-m2.7:free",
-        "cohere/north-mini-code:free",
-        "liquid/lfm-2.5-2.6b:free",
         "poolside/laguna-s-2.1:free",
-        "minimax/minimax-m3:free",
-        "google/gemma-4-31b-it:free",
         "openrouter/free"
     ]
     if model and model not in fallback_models:
@@ -542,10 +567,13 @@ Write the original commentary X post text now:"""
             if resp.status_code == 200:
                 data = resp.json()
                 if "choices" in data and len(data["choices"]) > 0:
-                    ai_text = data["choices"][0]["message"]["content"].strip()
-                    if len(ai_text) > 100:
+                    raw_text = data["choices"][0]["message"]["content"].strip()
+                    clean_text = sanitize_ai_output(raw_text)
+                    if clean_text and len(clean_text) > 80:
                         print(f"[SUCCESS] AI text generated via model: {current_model}")
-                        return ai_text
+                        return clean_text
+                    else:
+                        print(f"[WARN] OpenRouter model '{current_model}' output rejected by sanitizer (leaked CoT/preamble). Switching to fallback...")
             else:
                 print(f"[WARN] OpenRouter model '{current_model}' returned HTTP {resp.status_code}: {resp.text[:150]}")
         except Exception as e:
