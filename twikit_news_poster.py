@@ -318,45 +318,70 @@ def unwrap_google_news_url(url):
     return url
 
 def scrape_webpage(url):
-    """Scrape article page for media URLs and paragraph text"""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    """Scrape article page for video/image media URLs and paragraph text"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
     media_url = None
+    media_type = "image"
+    fallback_image = None
     paragraphs = []
     
     real_url = unwrap_google_news_url(url)
     
     try:
-        resp = requests.get(real_url, headers=headers, timeout=8)
+        resp = requests.get(real_url, headers=headers, timeout=10)
         if resp.status_code != 200:
-            return None, ""
+            return None, "image", "", None
             
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # 1. Look for og:video or secure_url
-        og_video = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:secure_url")
+        # 1. Search for video meta tags or HTML video elements
+        og_video = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:secure_url") or soup.find("meta", attrs={"name": "twitter:player"})
         if og_video and og_video.get("content"):
-            media_url = og_video["content"].strip()
-            
-        # 2. Look for og:image if video not found
+            cand = og_video["content"].strip()
+            if cand and not cand.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                media_url = cand
+                media_type = "video"
+
         if not media_url:
-            og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-            if og_image and og_image.get("content"):
-                img_candidate = og_image["content"].strip()
-                
-                # Check for generic logos
-                generic_keywords = [
-                    "punch-logo", "default-logo", "placeholder", "logo-", 
-                    "/logo.", "vanguardngr.com/wp-content/uploads/",
-                    "googleusercontent.com", "google.com", "gstatic.com",
-                    "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
-                    "default_image", "no-image", "site-logo", "party-logo",
-                    "pdp-logo", "apc-logo", "adc-logo", "coat-of-arms", "flag-of",
-                    "graphic-logo", "banner-logo", "vector-logo", "badge-logo",
-                    "party_logo", "apc_logo", "pdp_logo", "adc_logo"
-                ]
-                is_generic = any(kw in img_candidate.lower() for kw in generic_keywords)
-                if not is_generic:
+            for iframe in soup.find_all("iframe"):
+                src = iframe.get("src") or iframe.get("data-src") or ""
+                if any(v in src for v in ["youtube.com/embed", "youtu.be", "dailymotion.com", "vimeo.com"]):
+                    media_url = src.strip()
+                    media_type = "video"
+                    break
+
+        if not media_url:
+            for video in soup.find_all("video"):
+                src = video.get("src")
+                if src:
+                    media_url = src.strip()
+                    media_type = "video"
+                    break
+                for s in video.find_all("source"):
+                    if s.get("src"):
+                        media_url = s["src"].strip()
+                        media_type = "video"
+                        break
+                        
+        # 2. Extract og:image as featured or fallback image
+        og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
+        if og_image and og_image.get("content"):
+            img_candidate = og_image["content"].strip()
+            generic_keywords = [
+                "punch-logo", "default-logo", "placeholder", "logo-", 
+                "/logo.", "vanguardngr.com/wp-content/uploads/",
+                "googleusercontent.com", "google.com", "gstatic.com",
+                "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
+                "default_image", "no-image", "site-logo", "party-logo",
+                "pdp-logo", "apc-logo", "adc-logo", "coat-of-arms", "flag-of",
+                "graphic-logo", "banner-logo", "vector-logo", "badge-logo",
+                "party_logo", "apc_logo", "pdp_logo", "adc_logo"
+            ]
+            if not any(kw in img_candidate.lower() for kw in generic_keywords):
+                fallback_image = img_candidate
+                if not media_url:
                     media_url = img_candidate
+                    media_type = "image"
                     
         # 3. Extract text paragraphs
         for script in soup(["script", "style"]):
@@ -375,7 +400,80 @@ def scrape_webpage(url):
     except Exception as e:
         print(f"Scraping failed for {real_url}: {e}")
         
-    return media_url, "\n\n".join(paragraphs)
+    return media_url, media_type, "\n\n".join(paragraphs), fallback_image
+
+def download_media(media_url, media_type, fallback_image_url=None):
+    """Download video clip or featured image, with automatic fallback to image if video fails."""
+    if not media_url:
+        return None
+        
+    temp_dir = tempfile.gettempdir()
+    
+    if media_type == "video":
+        print(f"Attempting video download from: {media_url}")
+        out_tmpl = os.path.join(temp_dir, f"tweet_media_{int(time.time())}.mp4")
+        
+        # Direct MP4 download
+        if media_url.endswith(".mp4") and not ("youtube.com" in media_url or "youtu.be" in media_url):
+            try:
+                resp = requests.get(media_url, stream=True, timeout=20)
+                if resp.status_code == 200:
+                    with open(out_tmpl, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    if os.path.exists(out_tmpl) and os.path.getsize(out_tmpl) > 50000:
+                        print(f"Direct MP4 video saved: {out_tmpl}")
+                        return out_tmpl
+            except Exception as e:
+                print(f"Direct MP4 video download failed: {e}")
+
+        # Download video clip via yt-dlp
+        import yt_dlp
+        ydl_opts = {
+            'format': 'mp4[height<=720]/best[ext=mp4]/best',
+            'outtmpl': out_tmpl,
+            'quiet': True,
+            'no_warnings': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            'download_ranges': yt_dlp.utils.download_range_func(None, [(0, 45)]),
+            'force_keyframes_at_cuts': True
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([media_url])
+                if os.path.exists(out_tmpl) and os.path.getsize(out_tmpl) > 50000:
+                    print(f"Video clip saved via yt-dlp: {out_tmpl}")
+                    return out_tmpl
+        except Exception as e:
+            print(f"yt-dlp video download failed: {e}")
+            
+        print("Video download failed. Falling back to featured article image...")
+        media_url = fallback_image_url
+        media_type = "image"
+        
+    if media_type == "image" and media_url:
+        try:
+            print(f"Downloading featured image: {media_url}")
+            resp = requests.get(media_url, stream=True, timeout=20)
+            if resp.status_code == 200:
+                ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
+                if not ext.startswith("."):
+                    ext = "." + ext
+                if ext == ".jpe":
+                    ext = ".jpg"
+                
+                fd, temp_file_path = tempfile.mkstemp(suffix=ext)
+                os.close(fd)
+                
+                with open(temp_file_path, "wb") as out_file:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        out_file.write(chunk)
+                print(f"Featured image saved: {temp_file_path}")
+                return temp_file_path
+        except Exception as e:
+            print(f"Featured image download failed: {e}")
+            
+    return None
 
 def extract_direct_quote(text):
     """Extract a clean direct quote from scraped article text if available."""
@@ -636,9 +734,9 @@ async def process_post(client, db_conn, article, dry_run=False):
     print(f"\nProcessing new article: {title}")
     
     # 1. Scrape webpage
-    media_url, page_text = scrape_webpage(link)
+    media_url, media_type, page_text, fallback_image_url = scrape_webpage(link)
     if not media_url:
-        print(f"No media image for '{title}'. Proceeding with text news post.")
+        print(f"No media for '{title}'. Proceeding with text news post.")
         
     article_text = page_text if len(page_text) > 50 else description
     
@@ -725,33 +823,12 @@ async def process_post(client, db_conn, article, dry_run=False):
         
     print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
     
-    # 3. Download media
-    temp_file_path = None
-    if media_url:
-        try:
-            print(f"Downloading media: {media_url}")
-            resp = requests.get(media_url, stream=True, timeout=20)
-            if resp.status_code == 200:
-                ext = mimetypes.guess_extension(resp.headers.get("content-type", "")) or ".jpg"
-                if not ext.startswith("."):
-                    ext = "." + ext
-                if ext == ".jpe":
-                    ext = ".jpg"
-                
-                fd, temp_file_path = tempfile.mkstemp(suffix=ext)
-                os.close(fd)
-                
-                with open(temp_file_path, "wb") as out_file:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        out_file.write(chunk)
-                print(f"Media saved to: {temp_file_path}")
-        except Exception as e:
-            print(f"Media download failed: {e}")
-            temp_file_path = None
+    # 3. Download media (video clip or featured image)
+    temp_file_path = download_media(media_url, media_type, fallback_image_url=fallback_image_url)
         
-    # Enforce mandatory media image attachment for every news post
+    # Enforce mandatory media attachment for every news post
     if not temp_file_path or not os.path.exists(temp_file_path):
-        print(f"Skipping article '{title}' because media image could not be downloaded or was not found.")
+        print(f"Skipping article '{title}' because media could not be downloaded or was not found.")
         return False
 
     # 4. Post to Twitter
@@ -769,7 +846,10 @@ async def process_post(client, db_conn, article, dry_run=False):
         media_ids = []
         if temp_file_path and os.path.exists(temp_file_path):
             print("Uploading media to Twitter via Twikit...")
-            media_id = await client.upload_media(temp_file_path)
+            if temp_file_path.endswith(('.mp4', '.mov', '.avi')):
+                media_id = await client.upload_media(temp_file_path, media_category='tweet_video')
+            else:
+                media_id = await client.upload_media(temp_file_path)
             media_ids = [media_id]
             print(f"Media uploaded. ID: {media_id}")
             
