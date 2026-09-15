@@ -401,29 +401,49 @@ def extract_direct_quote(text):
     return None
 
 def sanitize_ai_output(text):
-    """Sanitize AI output to remove Chain-of-Thought (CoT) preambles, reasoning steps, or prompt regurgitation."""
+    """Content Quality Gateway Guardrail: Trash any output containing CoT preambles,
+    meta-analysis bullet lists, prompt leakage (like Alaye/Africa Desk meta references),
+    or invalid post structure before publishing to X."""
     if not text:
         return None
         
-    # 1. Remove <think>...</think> tags
+    # 1. Strip <think>...</think> tags
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     
-    # 2. Reject if the output is purely internal analysis / CoT preamble
-    if re.search(r"(?i)(Here'?s\s+a\s+thinking\s+process|1\.\s*\*\*Analyze\s+the\s+Request:\*\*|\-\s*\*\*Role:\*\*)", text):
-        parts = re.split(r"(?i)Here'?s\s+a\s+thinking\s+process:?", text)
-        if len(parts) > 1 and len(parts[-1].strip()) > 100 and not re.search(r"(?i)\*\*Analyze", parts[-1]):
-            text = parts[-1].strip()
-        else:
+    # 2. Hard Rejection Triggers: Meta CoT preambles, prompt headers, and rule lists
+    meta_patterns = [
+        r"(?i)Here'?s\s+a\s+thinking\s+process",
+        r"(?i)1\.\s*\*\*Analyze\s+the\s+Request:\*\*",
+        r"(?i)\*\*Role:\*\*",
+        r"(?i)\*\*Goal:\*\*",
+        r"(?i)\*\*Constraints:\*\*",
+        r"(?i)\*\*Input:\*\*",
+        r"(?i)\*\*Task:\*\*",
+        r"(?i)X\s+account\s+[\"']?Alaye",
+        r"(?i)Alaye\s*\|\s*Africa\s+Desk",
+        r"(?i)Africa\s+Desk",
+        r"(?i)originality\s+test",
+        r"(?i)author'?s\s+judgment",
+        r"(?i)raw\s+facts?",
+        r"(?i)credit\s+and\s+link\s+the\s+outlet",
+        r"(?i)write\s+posts?\s+for",
+        r"(?i)system\s+prompt"
+    ]
+    
+    for pattern in meta_patterns:
+        if re.search(pattern, text):
+            print(f"[GATEWAY TRASHED] Detected meta/CoT pattern match '{pattern}'. Discarding output!")
             return None
-            
+
     # 3. Clean up leading markdown formatting if output starts with code fences
     text = re.sub(r'^```[a-zA-Z]*\n', '', text)
     text = re.sub(r'\n```$', '', text).strip()
     
-    # 4. Final validation check
-    if len(text) < 80 or re.search(r"(?i)^(Here'?s\s+a\s+thinking\s+process|1\.\s*\*\*Analyze)", text):
+    # 4. Length validation: Must be at least 100 characters of clean prose
+    if len(text) < 100:
+        print("[GATEWAY TRASHED] Output length too short (<100 chars). Discarding output!")
         return None
-        
+
     return text
 
 def call_openrouter(title, text, source, author, category, quote=None):
@@ -439,7 +459,7 @@ def call_openrouter(title, text, source, author, category, quote=None):
 
     system_prompt = """SYSTEM PROMPT:
 
-You write posts for an X account called Alaye | Africa Desk.
+You write original news commentary posts for an X news account.
 
 The account is a Nigerian/African commentator. It is not a news wire, not a reprint desk, and not a “rewrite this article” page.
 
@@ -474,7 +494,6 @@ Voice
 - Direct. Short sentences. No corporate English.
 - Sharp, not cruel. No mockery of victims.
 - Sound like a person who reads news and has a view, not like the newspaper.
-- Display name vibe: Alaye | Africa Desk.
 - Nigerian English is fine when natural. Do not force slang.
 
 Default structure
@@ -512,16 +531,8 @@ Ask yourself:
 
 If yes to 2 or 3, rewrite until the answer is no.
 
-When the user pastes an article
-First, internally extract:
-- 3 facts max
-- What the outlet already argued
-- What Alaye can add that the outlet did not
-
-Then write the post. Do not output the extract unless asked.
-
 Output format
-Give ONLY the final post text ready to publish on X. Do NOT output internal extraction, risk assessments, or notes. Output ONLY the post text (Fact in 1-2 lines, then your point/argument, then Source line). Nothing else."""
+Give ONLY the final commentary post text ready to publish on X (Fact in 1-2 lines, then your point/argument, then Source line). Do NOT output internal extraction, risk assessments, notes, preambles, or rule descriptions. Output ONLY the post text. Nothing else."""
 
     user_prompt = f"""Input Article:
 Title: {title}
@@ -570,17 +581,17 @@ Write the original commentary X post text now:"""
                     raw_text = data["choices"][0]["message"]["content"].strip()
                     clean_text = sanitize_ai_output(raw_text)
                     if clean_text and len(clean_text) > 80:
-                        print(f"[SUCCESS] AI text generated via model: {current_model}")
+                        print(f"[SUCCESS] [GATEWAY PASSED] AI text generated via model: {current_model}")
                         return clean_text
                     else:
-                        print(f"[WARN] OpenRouter model '{current_model}' output rejected by sanitizer (leaked CoT/preamble). Switching to fallback...")
+                        print(f"[WARN] OpenRouter model '{current_model}' output rejected by Gateway (meta/CoT leakage). Switching to fallback...")
             else:
                 print(f"[WARN] OpenRouter model '{current_model}' returned HTTP {resp.status_code}: {resp.text[:150]}")
         except Exception as e:
             print(f"[WARN] OpenRouter model '{current_model}' failed: {e}")
 
     # Completely removed local fallback generator as requested
-    print("[ERROR] All OpenRouter models failed. Returning None.")
+    print("[ERROR] All OpenRouter models failed or were trashed by Gateway. Returning None.")
     return None
 
 async def setup_twitter_client():
