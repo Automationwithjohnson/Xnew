@@ -756,15 +756,18 @@ async def process_post(client, db_conn, article, dry_run=False):
         print(f"Skipping article '{title}' because AI text generation failed.")
         return False
         
-    # Strip any URLs from tweet_text and build linkless source line
+    # Strip any URLs, existing "Source..." lines, and trailing dashes from raw AI text
     tweet_text = re.sub(r'https?://\S+', '', tweet_text).strip()
+    tweet_text = re.sub(r'(?i)\bSource:?\s*.*$', '', tweet_text).strip()
+    tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
+
     source_line = f"Source: {source}"
     overhead = len(source_line) + 4  # newlines
     
     max_body_len = max(400, 740 - overhead)
-    min_body_len = max(300, 600 - overhead)
+    min_body_len = max(300, 580 - overhead)
     
-    # 1. Truncate if body is too long
+    # 1. Truncate body if it is too long
     if len(tweet_text) > max_body_len:
         truncated = tweet_text[:max_body_len]
         last_dot = truncated.rfind('.')
@@ -777,7 +780,7 @@ async def process_post(client, db_conn, article, dry_run=False):
             else:
                 tweet_text = truncated.strip() + "."
 
-    # 2. Pad from article_text if body is too short
+    # 2. Pad body from article_text if body is too short (BEFORE appending Source line)
     if len(tweet_text) < min_body_len and article_text:
         extra_sentences = [s.strip() for s in article_text.split('.') if len(s.strip()) > 15]
         for sentence in extra_sentences:
@@ -789,17 +792,13 @@ async def process_post(client, db_conn, article, dry_run=False):
             if len(tweet_text) >= min_body_len:
                 break
 
-    if "source:" in tweet_text.lower():
-        tweet_text = re.sub(r'https?://\S+', '', tweet_text)
-        tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
-        formatted_tweet = tweet_text
-    else:
-        formatted_tweet = f"{tweet_text}\n\n{source_line}"
-    
-    # Ensure no residual URLs or trailing dashes exist in formatted_tweet
-    formatted_tweet = re.sub(r'https?://\S+', '', formatted_tweet)
-    formatted_tweet = re.sub(r'—\s*$', '', formatted_tweet).strip()
+    # Strip any trailing source mention again just in case
+    tweet_text = re.sub(r'(?i)\bSource:?\s*.*$', '', tweet_text).strip()
+    tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
 
+    # Form final tweet: ONLY the clean commentary body + double line break + single Source line
+    formatted_tweet = f"{tweet_text}\n\n{source_line}"
+    
     # Hard safety check: re-trim if total raw post exceeds 745 characters
     if len(formatted_tweet) > 745:
         max_safe_body = 745 - overhead
@@ -809,16 +808,11 @@ async def process_post(client, db_conn, article, dry_run=False):
             tweet_text = truncated[:last_dot + 1].strip()
         else:
             tweet_text = truncated.strip() + "."
-        if "source:" in tweet_text.lower():
-            formatted_tweet = tweet_text
-        else:
-            formatted_tweet = f"{tweet_text}\n\n{source_line}"
-        formatted_tweet = re.sub(r'https?://\S+', '', formatted_tweet)
-        formatted_tweet = re.sub(r'—\s*$', '', formatted_tweet).strip()
+        formatted_tweet = f"{tweet_text}\n\n{source_line}"
 
-    # Final Guard: Skip only if formatted length is under 550 chars after padding
-    if len(formatted_tweet) < 550:
-        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum of 550 chars.")
+    # Final Guard: Skip only if formatted length is under 520 chars after padding
+    if len(formatted_tweet) < 520:
+        print(f"Skipping article '{title}' because total length ({len(formatted_tweet)} chars) is below minimum of 520 chars.")
         return False
         
     print(f"Drafted Tweet ({len(formatted_tweet)} chars):\n{formatted_tweet}")
