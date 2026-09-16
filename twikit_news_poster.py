@@ -480,8 +480,8 @@ def extract_direct_quote(text):
     if not text:
         return None
         
-    # Match double or single quotes "..." or '...' or “...”
-    matches = re.findall(r'["“«]([^"”»]{20,220})["”»]', text)
+    # Match double or single quotes "..." or "..." or «...»
+    matches = re.findall(r'["\u201c\u00ab]([^"\u201d\u00bb]{20,220})["\u201d\u00bb]', text)
     if matches:
         for m in matches:
             cleaned = m.strip()
@@ -492,8 +492,16 @@ def extract_direct_quote(text):
     quote_verbs = [" said ", " stated ", " declared ", " warned ", " remarked ", " noted ", " added ", " explained ", " asserted "]
     sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 30]
     for s in sentences:
-        if any(verb in f" {s.lower()} " for verb in quote_verbs) and len(s) <= 240:
+        lower_s = f" {s.lower()} "
+        if any(verb in lower_s for verb in quote_verbs) and len(s) <= 240:
             if not any(bad in s.lower() for bad in ["click here", "read more", "copyright", "subscribe"]):
+                # Strip the attribution frame (e.g. "The minister warned that ") to extract just the core claim
+                cleaned = re.sub(
+                    r'^.*?\b(?:said|stated|declared|warned|remarked|noted|added|explained|asserted)\b\s+(?:that\s+)?',
+                    '', s, flags=re.IGNORECASE
+                ).strip()
+                if len(cleaned) >= 20:
+                    return cleaned
                 return s.strip()
                 
     return None
@@ -600,7 +608,10 @@ Default structure
 3. Optional: one comparison you actually understand (not just the two examples already listed in the article).
 
 Source line format
-Source: [Outlet]
+Image Source: [Outlet]
+
+How to use the Direct Quote
+If a Direct Quote is provided in the input, you MUST use it. Drop it naturally into your first or second sentence to anchor the post in a real voice from the story. Do not paste it in full as a standalone block. Weave it as a short clause inside your own sentence. Example: the CEO admitted the company "cannot survive without government contracts" which tells you exactly where the real risk sits.
 
 Do not write “Via X | Report by Y”.
 Do NOT write the word "Title:" or "Headline:".
@@ -758,10 +769,10 @@ async def process_post(client, db_conn, article, dry_run=False):
         
     # Strip any URLs, existing "Source..." lines, and trailing dashes from raw AI text
     tweet_text = re.sub(r'https?://\S+', '', tweet_text).strip()
-    tweet_text = re.sub(r'(?i)\bSource:?\s*.*$', '', tweet_text).strip()
+    tweet_text = re.sub(r'(?i)\b(Image\s*)?Source:?\s*.*$', '', tweet_text).strip()
     tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
 
-    source_line = f"Source: {source}"
+    source_line = f"Image Source: {source}"
     overhead = len(source_line) + 4  # newlines
     
     max_body_len = max(400, 740 - overhead)
@@ -793,10 +804,10 @@ async def process_post(client, db_conn, article, dry_run=False):
                 break
 
     # Strip any trailing source mention again just in case
-    tweet_text = re.sub(r'(?i)\bSource:?\s*.*$', '', tweet_text).strip()
+    tweet_text = re.sub(r'(?i)\b(Image\s*)?Source:?\s*.*$', '', tweet_text).strip()
     tweet_text = re.sub(r'—\s*$', '', tweet_text).strip()
 
-    # Form final tweet: ONLY the clean commentary body + double line break + single Source line
+    # Form final tweet: ONLY the clean commentary body + double line break + single Image Source line
     formatted_tweet = f"{tweet_text}\n\n{source_line}"
     
     # Hard safety check: re-trim if total raw post exceeds 745 characters

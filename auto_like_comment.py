@@ -7,7 +7,6 @@ import json
 import asyncio
 import requests
 import re
-import base64
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -95,19 +94,13 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+MODEL = os.getenv("OPENROUTER_MODEL", "nex-agi/nex-n2.5-mini:free")
 COOKIES_PATH = os.getenv("COOKIES_PATH", "Xaccountdata.json")
 DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
-MIN_REPLIES = 0  # Reply to any target post matching queries
-SEARCH_QUERIES = [
-    "tech OR technology OR AI OR LLM filter:images",
-    "business OR finance OR startup OR economy filter:images",
-    "news OR breaking OR sports OR culture filter:images",
-    "productivity OR software OR coding OR design filter:images"
-]
+MIN_REPLIES = 0
 
 if not API_KEY:
     print("Error: OPENROUTER_API_KEY is not set in .env file!")
@@ -127,12 +120,12 @@ def setup_database():
 
 def is_already_processed(conn, tweet_id):
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM completed WHERE tweet_id = ?", (tweet_id,))
+    cursor.execute("SELECT 1 FROM completed WHERE tweet_id = ?", (str(tweet_id),))
     return cursor.fetchone() is not None
 
 def record_processed(conn, tweet_id):
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO completed (tweet_id, processed_at) VALUES (?, ?)", (tweet_id, time.time()))
+    cursor.execute("INSERT OR IGNORE INTO completed (tweet_id, processed_at) VALUES (?, ?)", (str(tweet_id), time.time()))
     conn.commit()
 
 def scrape_article_text(url):
@@ -152,41 +145,54 @@ def scrape_article_text(url):
         print(f"Link scraping skipped: {e}")
     return ""
 
-def get_base64_image(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+def sanitize_ai_output(content: str) -> str:
+    if not content:
+        return ""
+    # Strip thinking tags
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+    # Common preamble markers
+    markers = [
+        "here is my reply:", "here's my reply:", "here is the reply:", "here's the reply:",
+        "my reply:", "reply:", "option 1:", "option 2:", "comment:"
+    ]
+    lower = content.lower()
+    for m in markers:
+        if m in lower:
+            idx = lower.find(m)
+            content = content[idx + len(m):].strip()
+            break
+    # Remove quotes & backticks
+    content = content.replace('"', '').replace('`', '').strip()
+    # Replace dashes/em-dashes/en-dashes with simple spaces/commas as per user rule
+    content = content.replace('—', ', ').replace('–', ', ').replace('-', ' ')
+    # Clean multiple spaces
+    content = re.sub(r'\s+', ' ', content).strip()
+    return content
 
-def call_openrouter(x_post_text, article_context="", image_path=None):
-    ai_limit = 200  # Enforce strict limit under 250 characters
+def call_openrouter(x_post_text, article_context=""):
+    ai_limit = 200  # Enforce strict limit under 200 characters
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
-    
-    image_instruction = ""
-    if image_path:
-        image_instruction = "- Analyze both the text and the image. Use details from the image (the charts, the branding, the people, the text in the image) to write a customized reaction comment.\n"
 
     prompt = f"""You are a smart, insightful, and adaptable commentator on X. Your style is conversational, knowledgeable, friendly, and street-smart. You seamlessly adapt your commentary to WHATEVER content, topic, or niche you encounter (tech, AI, business, finance, news, sports, culture, design, or daily observations).
 
 Task:
-Analyze the X post (and any image/link context provided) and write a short, sharp, highly relevant reply directly under the post.
+Analyze the X post payload below (which may include outer commentary, quoted tweets, story updates, or repost context) and write a short, sharp, highly relevant reply directly under the post.
 
 Rules:
-
-- Universal Adaptation & Strict Relevance: Your reply MUST directly adapt to and address the specific content, facts, or story of the post. If the post is about tech or business, give an insider tech/business take. If the post is about news, sports, or culture, give a smart, engaging commentary on that exact event.
-- Natural Integration: Never force pre-written pitches. Only mention automation, workflows, or systems if the post specifically talks about manual tasks, data entry, CRM syncs, or software tools where it fits 100% naturally. Otherwise, just write a sharp, smart reaction to the post topic itself.
+- Universal Adaptation & Strict Relevance: Your reply MUST directly adapt to and address the specific content, facts, or story of the post. If it is news, crime, tech, or culture, give a smart, engaging reaction.
+- Natural Integration: Never force pre-written pitches. Do not advertise unless 100% appropriate.
 - Length Constraint: The entire reply MUST be under {ai_limit} characters. Keep it brief.
 - Simple English Constraint: Write in clear, simple English that even a kid can understand.
-- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply. Make it a direct statement or opinion.
-- Add real value: Speak like someone who understands real-world facts, human nature, and growth.
-{image_instruction}- Style Variation: Vary your opening style. Sometimes start with a strong opinion, sometimes with a surprising observation, and sometimes with a direct statement.
-- Sound natural and conversational (not robotic or corporate).
-- Keep it relatively short and easy to read on mobile.
-- Do not use any punctuation marks other than standard periods and commas.
+- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply.
+- Add real value: Speak like someone who understands real-world facts and human nature.
+- Style Variation: Vary your opening style. Sometimes start with a strong opinion, sometimes with a surprising observation.
+- Sound natural and conversational.
 
-Output Format (Follow this exactly):
-CRITICAL: Output ONLY the exact reply text. Do not include any headers, labels, intros, or explanations. You MUST NOT start with "Here is my reply:" or output any thoughts or reasons about the tweet. Output ONLY the comment itself.
+Output Format:
+CRITICAL: Output ONLY the exact reply text. Do not include any headers, labels, intros, or explanations. You MUST NOT start with "Here is my reply:" or output any thoughts. Output ONLY the comment itself.
 
-Here is the X post:
+Here is the X post payload:
 {x_post_text}{context_str}"""
 
     headers = {
@@ -197,6 +203,7 @@ Here is the X post:
     }
     
     fallback_models = [
+        "nex-agi/nex-n2.5-mini:free",
         "meta-llama/llama-3.3-70b-instruct",
         "google/gemini-2.5-flash",
         "openai/gpt-4o-mini",
@@ -206,58 +213,23 @@ Here is the X post:
         fallback_models.insert(0, MODEL)
         
     for current_model in fallback_models:
-        payloads_to_try = []
-        if image_path:
-            try:
-                base64_image = get_base64_image(image_path)
-                payloads_to_try.append({
-                    "model": current_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                            ]
-                        }
-                    ]
-                })
-            except Exception:
-                pass
-                
-        payloads_to_try.append({
+        payload = {
             "model": current_model,
             "messages": [{"role": "user", "content": prompt}]
-        })
-
-        for payload in payloads_to_try:
-            try:
-                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if "choices" in data and len(data["choices"]) > 0:
-                        msg = data["choices"][0].get("message", {})
-                        content = (msg.get("content") or "").strip()
-                        if content:
-                            lower_content = content.lower()
-                            markers = [
-                                "here is my reply:",
-                                "here's my reply:",
-                                "here is the reply:",
-                                "here's the reply:",
-                                "my reply:",
-                                "reply:"
-                            ]
-                            for marker in markers:
-                                if marker in lower_content:
-                                    idx = lower_content.find(marker)
-                                    content = content[idx + len(marker):].strip()
-                                    break
-                                    
-                            content = content.replace('"', '').strip()
-                            return content
-            except Exception as e:
-                print(f"OpenRouter model '{current_model}' failed: {e}")
+        }
+        try:
+            resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    msg = data["choices"][0].get("message", {})
+                    content = (msg.get("content") or "").strip()
+                    if content:
+                        cleaned = sanitize_ai_output(content)
+                        if cleaned:
+                            return cleaned
+        except Exception as e:
+            print(f"OpenRouter model '{current_model}' failed: {e}")
 
     print("All OpenRouter attempts failed to generate a valid comment.")
     return None
@@ -306,7 +278,7 @@ def deduplicate_cookies(client):
     except Exception:
         pass
 
-async def run_commenter_batch(test_mode=False, now_mode=False):
+async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
     db_conn = setup_database()
     
     try:
@@ -319,24 +291,30 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
         db_conn.close()
         return
 
-    min_replies_needed = 0 if test_mode else MIN_REPLIES
+    min_replies_needed = 0 if (test_mode or max_posts == 1) else MIN_REPLIES
     successful_replies = 0
-    max_replies_to_post = 3 if test_mode else 5
+    max_replies_to_post = max_posts if max_posts else (1 if test_mode else 5)
 
     tweets = []
-    print("Fetching tweets from your FYP / Home Timeline...")
+    print("Fetching tweets from your Following Timeline (get_latest_timeline)...")
     deduplicate_cookies(client)
     try:
-        timeline_tweets = await client.get_timeline(count=35)
+        timeline_tweets = await client.get_latest_timeline(count=35)
         if timeline_tweets:
             tweets = list(timeline_tweets)
-            print(f"Fetched {len(tweets)} tweets directly from FYP / Home Timeline!")
+            print(f"Fetched {len(tweets)} tweets directly from your Following Timeline!")
     except Exception as e:
-        print(f"Failed to fetch FYP timeline: {e}")
+        print(f"get_latest_timeline failed: {e}. Trying get_timeline fallback...")
+        try:
+            timeline_tweets = await client.get_timeline(count=35)
+            if timeline_tweets:
+                tweets = list(timeline_tweets)
+        except Exception as e2:
+            print(f"Timeline fetch fallback failed: {e2}")
 
-    print(f"Total FYP tweets gathered for evaluation: {len(tweets)}")
+    print(f"Total Following tweets gathered for evaluation: {len(tweets)}")
     if not tweets:
-        print("No tweets found on FYP / Home Timeline.")
+        print("No tweets found on Following Timeline.")
         db_conn.close()
         return
 
@@ -344,153 +322,171 @@ async def run_commenter_batch(test_mode=False, now_mode=False):
         if successful_replies >= max_replies_to_post:
             break
 
-        print(f"Evaluating tweet {tweet.id} by @{tweet.user.screen_name} (Created: {tweet.created_at_datetime})")
+        # 1. Determine target tweet and repost wrapper
+        target_tweet = tweet
+        reposted_by = None
 
-        # 1. Skip if it is our own tweet or we already processed it
-        if tweet.user.id == my_id or is_already_processed(db_conn, tweet.id):
-            continue
-
-        # 2. Skip retweets
         if hasattr(tweet, "retweeted_status") and tweet.retweeted_status:
+            reposted_by = getattr(tweet.user, "screen_name", "unknown")
+            target_tweet = tweet.retweeted_status
+            print(f"\n[REPOST DETECTED] Reposted by @{reposted_by}. Targeting original tweet ID: {target_tweet.id} by @{getattr(target_tweet.user, 'screen_name', 'unknown')}")
+
+        target_author_id = getattr(target_tweet.user, 'id', '')
+        target_author_handle = getattr(target_tweet.user, 'screen_name', 'unknown')
+
+        # Skip if our own tweet or already processed
+        if str(target_author_id) == str(my_id) or is_already_processed(db_conn, target_tweet.id):
+            print(f"Skipping tweet {target_tweet.id} (own tweet or already processed)")
             continue
 
-        # 2.5 Skip if the tweet contains video or animated GIF media
-        if hasattr(tweet, "media") and tweet.media:
-            if any(m.type in ["video", "animated_gif"] for m in tweet.media):
-                print(f"Skipping tweet {tweet.id} (contains video or GIF)")
-                continue
-
-            # 3. Check if the tweet was posted within the last 24 hours
-            tweet_time = tweet.created_at_datetime
+        # Check post age (<24 hours)
+        tweet_time = getattr(target_tweet, "created_at_datetime", None)
+        if tweet_time:
             now_utc = datetime.now(timezone.utc)
             if (now_utc - tweet_time) > timedelta(hours=24):
-                print(f"Skipping tweet {tweet.id} (posted {tweet_time} which is older than 24 hours)")
+                print(f"Skipping tweet {target_tweet.id} (posted {tweet_time} > 24h ago)")
                 continue
 
-            # 4. Check for minimum replies to target active discussions
-            reply_count = getattr(tweet, "reply_count", 0) or 0
-            if reply_count < min_replies_needed:
-                print(f"Skipping tweet {tweet.id} (replies: {reply_count} < {min_replies_needed})")
-                continue
+        # Check reply threshold
+        reply_count = getattr(target_tweet, "reply_count", 0) or 0
+        if reply_count < min_replies_needed:
+            print(f"Skipping tweet {target_tweet.id} (replies: {reply_count} < {min_replies_needed})")
+            continue
 
-            print(f"\nTarget post matches! (ID: {tweet.id}, Author: @{tweet.user.screen_name}, Replies: {reply_count})")
-            print(f"Text: {tweet.text[:100]}...")
+        # 2. Pattern Recognition & Context Extraction
+        is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
+        is_self_quote = False
+        quoted_tweet = None
 
-            # Extract external links and scrape text context if possible
-            article_context = ""
-            urls = re.findall(r'https?://[^\s]+', tweet.text)
-            if urls:
-                # Use first URL
-                target_url = urls[0]
-                # Filter out standard t.co media references
-                if "t.co" in target_url:
-                    print(f"Scraping link context from: {target_url}")
-                    article_context = scrape_article_text(target_url)
-                    if article_context:
-                        print(f"Scraped context: {article_context[:100]}...")
+        if is_quote:
+            quoted_tweet = target_tweet.quoted_status
+            quoted_author_id = getattr(quoted_tweet.user, 'id', '')
+            if str(target_author_id) == str(quoted_author_id):
+                is_self_quote = True
+                pattern_name = "Pattern 4: Self-Quote / Thread Story Update"
+            else:
+                pattern_name = "Pattern 1/5: Quote Tweet"
+        elif reposted_by:
+            pattern_name = f"Pattern 2: Repost of Short Text/Media (Reposted by @{reposted_by})"
+        else:
+            pattern_name = "Pattern 3: Standard Post / News / Media"
 
-            # 4. Like the tweet
-            try:
-                print("Liking the tweet...")
-                await tweet.favorite()
-                print("Tweet liked successfully!")
-            except Exception as e:
-                print(f"Failed to like tweet: {e}")
+        if reposted_by and is_quote:
+            pattern_name = f"Pattern 5: Repost of Quote Tweet (Reposted by @{reposted_by})"
 
-            # Wait between Like and Comment (1s in test/now mode, 5-15s in prod)
-            await asyncio.sleep(1 if (test_mode or now_mode) else random.randint(5, 15))
+        print(f"\n==================================================")
+        print(f"TARGET MATCHED: {pattern_name}")
+        print(f"Target Tweet ID: {target_tweet.id} | Original Author: @{target_author_handle}")
+        print(f"Text Snippet: {target_tweet.text[:120]}...")
+        print(f"==================================================")
 
-            # 5. Check for image media and download if present
-            temp_img_path = None
-            if hasattr(tweet, "media") and tweet.media:
-                photos = [m for m in tweet.media if m.type == "photo"]
-                if photos:
-                    photo_media = photos[0]
-                    temp_img_path = os.path.join(SCRIPT_DIR, f"temp_tweet_img_{tweet.id}.jpg")
-                    try:
-                        print("Downloading post image for AI vision...")
-                        await photo_media.download(temp_img_path)
-                        print("Photo downloaded successfully.")
-                    except Exception as e:
-                        print(f"Failed to download image, falling back to text-only: {e}")
-                        temp_img_path = None
+        # 3. Construct Context Payload
+        context_parts = []
+        if reposted_by:
+            context_parts.append(f"[Note: Reposted on timeline by @{reposted_by}]")
 
-            # 6. Generate reply content
-            comment_content = call_openrouter(tweet.text, article_context, temp_img_path)
-            
-            # Clean up temp image
-            if temp_img_path:
-                try:
-                    os.remove(temp_img_path)
-                except:
-                    pass
+        if is_self_quote and quoted_tweet:
+            context_parts.append(f"[Story Update / Follow-up by @{target_author_handle}]")
+            context_parts.append(f"Previous Post: {quoted_tweet.text}")
+            context_parts.append(f"Latest Update: {target_tweet.text}")
+        elif is_quote and quoted_tweet:
+            quoted_handle = getattr(quoted_tweet.user, 'screen_name', 'unknown')
+            context_parts.append(f"[Quote Tweet Context]")
+            context_parts.append(f"Outer Author (@{target_author_handle}): {target_tweet.text}")
+            context_parts.append(f"Quoted Inner Post (@{quoted_handle}): {quoted_tweet.text}")
+        else:
+            context_parts.append(f"Post Text: {target_tweet.text}")
 
-            if not comment_content:
-                print("Failed to generate comment. Skipping.")
-                continue
+        # Extract external link article context
+        article_context = ""
+        urls = re.findall(r'https?://[^\s]+', target_tweet.text)
+        if urls:
+            target_url = urls[0]
+            if "t.co" in target_url:
+                print(f"Scraping link context from {target_url}...")
+                article_context = scrape_article_text(target_url)
 
-            # Programmatically enforce the under 250-character limit
-            if len(comment_content) > 245:
-                comment_content = comment_content[:242].strip() + "..."
+        full_payload = "\n".join(context_parts)
 
-            print(f"Drafted Comment:\n{comment_content} (Length: {len(comment_content)})")
+        # 4. Like target tweet
+        try:
+            print(f"Liking target tweet {target_tweet.id} by @{target_author_handle}...")
+            await target_tweet.favorite()
+            print("Tweet liked successfully!")
+        except Exception as e:
+            print(f"Like skipped/failed: {e}")
 
-            # 6. Post the reply/comment
-            try:
-                print("Posting comment...")
-                await client.create_tweet(text=comment_content, reply_to=tweet.id)
-                print("Comment posted successfully!")
-                record_processed(db_conn, tweet.id)
-                successful_replies += 1
-            except Exception as e:
-                print(f"Failed to post comment: {e}")
-                # Save to database to prevent infinite retries
-                record_processed(db_conn, tweet.id)
+        await asyncio.sleep(1 if (test_mode or max_posts == 1) else random.randint(5, 15))
 
-            # Wait before moving to next match (0s in test, 3-5 minutes in prod)
-            if successful_replies < max_replies_to_post:
-                delay = 1 if (test_mode or now_mode) else random.randint(180, 300)
-                print(f"Sleeping for {delay} seconds before checking other accounts...")
-                await asyncio.sleep(delay)
+        # 5. Generate AI comment (Pure Text)
+        raw_comment = call_openrouter(full_payload, article_context=article_context)
+
+        if not raw_comment:
+            print("Failed to generate comment. Skipping.")
+            continue
+
+        comment_content = sanitize_ai_output(raw_comment)
+        if len(comment_content) > 245:
+            comment_content = comment_content[:242].strip() + "..."
+
+        print(f"\n--------------------------------------------------")
+        print(f"DRAFTED COMMENT TO POST:")
+        print(f"\"{comment_content}\"")
+        print(f"Length: {len(comment_content)} chars")
+        print(f"--------------------------------------------------\n")
+
+        # 6. Post comment directly to original target tweet
+        try:
+            print(f"Posting reply to target tweet {target_tweet.id} (@{target_author_handle})...")
+            await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
+            print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
+            record_processed(db_conn, target_tweet.id)
+            successful_replies += 1
+        except Exception as e:
+            print(f"Failed to post comment: {e}")
+            record_processed(db_conn, target_tweet.id)
+
+        if successful_replies < max_replies_to_post:
+            delay = 1 if (test_mode or max_posts == 1) else random.randint(180, 300)
+            print(f"Sleeping for {delay} seconds before checking next post...")
+            await asyncio.sleep(delay)
 
     db_conn.close()
 
 async def main():
     test_mode = "--test" in sys.argv
     now_mode = "--now" in sys.argv
+    single_mode = "--single" in sys.argv or "--test" in sys.argv
     
     print("==================================================")
-    print("      X AUTO LIKE & COMMENT BOT STARTING...       ")
-    if test_mode:
-        print("   MODE: TEST MODE (3 replies only, zero delays) ")
+    print("  X FOLLOWING TIMELINE AUTO LIKE & COMMENT BOT   ")
+    if single_mode:
+        print("   MODE: SINGLE TEST (1 reply only, 0 delays)    ")
     elif now_mode:
-        print("   MODE: MANUAL RUN (5 replies only, zero delays) ")
+        print("   MODE: MANUAL BATCH (5 replies, 0 delays)       ")
     else:
         print(f"   Interval: Every {LOOP_INTERVAL_MINUTES} minutes")
-        print(f"   Target Threshold: {MIN_REPLIES}+ replies minimum")
-        print(f"   Production Delay: Random 3-5 minutes between posts")
-    print("   Press Ctrl+C to terminate the loop")
     print("==================================================")
     
-    if test_mode:
+    if single_mode:
         try:
-            print("\nRunning auto like & comment test batch...")
-            await run_commenter_batch(test_mode=True)
-            print("\nTest completed successfully!")
+            print("\nRunning single post test from Following timeline...")
+            await run_commenter_batch(test_mode=True, max_posts=1)
+            print("\nSingle post test completed successfully!")
         except Exception as e:
             print(f"Error during test execution: {e}")
     elif now_mode:
         try:
             print("\nRunning manual auto like & comment batch...")
-            await run_commenter_batch(test_mode=False, now_mode=True)
-            print("\nManual run completed successfully!")
+            await run_commenter_batch(now_mode=True)
+            print("\nManual batch run completed successfully!")
         except Exception as e:
             print(f"Error during manual execution: {e}")
     else:
         while True:
             try:
-                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running auto like & comment batch...")
-                await run_commenter_batch(test_mode=False)
+                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running Following timeline commenter batch...")
+                await run_commenter_batch()
             except Exception as e:
                 print(f"Error during execution batch: {e}")
                 
@@ -502,5 +498,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nAuto-commenter stopped. Goodbye!")
-
-
