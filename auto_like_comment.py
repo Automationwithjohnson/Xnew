@@ -169,7 +169,7 @@ def sanitize_ai_output(content: str) -> str:
     content = re.sub(r'\s+', ' ', content).strip()
     return content
 
-def call_openrouter(x_post_text, article_context=""):
+def call_openrouter(x_post_text, article_context="", image_url=None):
     ai_limit = 200  # Enforce strict limit under 200 characters
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
@@ -201,7 +201,42 @@ Here is the X post payload:
         "HTTP-Referer": "https://automatewithjohnson.com",
         "X-Title": "AutomatesWithJohnson Auto Commenter"
     }
-    
+
+    # ── VISION PATH: tweet has a photo ──────────────────────────────────────
+    if image_url:
+        print(f"[VISION] Tweet has image. Sending to vision model with photo context...")
+        vision_models = ["z-ai/glm-5.3-flash:batch", "google/gemini-2.5-flash", "openai/gpt-4o-mini"]
+        vision_message = {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": prompt}
+            ]
+        }
+        for vision_model in vision_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json={"model": vision_model, "messages": [vision_message]},
+                    timeout=20
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "choices" in data and len(data["choices"]) > 0:
+                        content = (data["choices"][0].get("message", {}).get("content") or "").strip()
+                        if content:
+                            cleaned = sanitize_ai_output(content)
+                            if cleaned:
+                                print(f"[VISION] Comment generated via {vision_model}")
+                                return cleaned
+                else:
+                    print(f"[VISION] {vision_model} returned {resp.status_code}. Trying next...")
+            except Exception as e:
+                print(f"[VISION] {vision_model} failed: {e}")
+        print("[VISION] All vision models failed. Falling back to text-only...")
+
+    # ── TEXT-ONLY PATH (also fallback when vision fails) ─────────────────────
     fallback_models = [
         "nex-agi/nex-n2.5-mini:free",
         "meta-llama/llama-3.3-70b-instruct",
@@ -211,7 +246,7 @@ Here is the X post payload:
     ]
     if MODEL and MODEL not in fallback_models:
         fallback_models.insert(0, MODEL)
-        
+
     for current_model in fallback_models:
         payload = {
             "model": current_model,
@@ -364,6 +399,21 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         full_payload = "\n".join(context_parts)
 
+        # Detect photo media — pass URL to vision model. Ignore video/gif (text is enough).
+        tweet_image_url = None
+        tweet_media = getattr(target_tweet, "media", None)
+        if tweet_media:
+            for m in tweet_media:
+                media_type = getattr(m, "type", "")
+                if media_type == "photo":
+                    tweet_image_url = getattr(m, "media_url", None)
+                    if tweet_image_url:
+                        print(f"[MEDIA] Photo detected on tweet. Will send image to vision model.")
+                        break
+            if not tweet_image_url:
+                media_type = getattr(tweet_media[0], "type", "unknown")
+                print(f"[MEDIA] {media_type} detected. Using text only.")
+
         try:
             print(f"Liking tweet {target_tweet.id} by @{target_author_handle}...")
             await target_tweet.favorite()
@@ -373,7 +423,7 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         await asyncio.sleep(1 if (test_mode or max_posts == 1) else random.randint(5, 15))
 
-        raw_comment = call_openrouter(full_payload, article_context=article_context)
+        raw_comment = call_openrouter(full_payload, article_context=article_context, image_url=tweet_image_url)
         if not raw_comment:
             print("Failed to generate comment. Skipping.")
             continue
