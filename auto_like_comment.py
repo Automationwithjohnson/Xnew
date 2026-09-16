@@ -215,7 +215,13 @@ Here is the X post payload:
     # ── VISION PATH: tweet has a photo ──────────────────────────────────────
     if image_url:
         print(f"[VISION] Tweet has image. Sending to vision model with photo context...")
-        vision_models = ["z-ai/glm-5.3-flash:batch", "google/gemini-2.5-flash", "openai/gpt-4o-mini"]
+        vision_models = [
+            "meta-llama/llama-3.2-11b-vision-instruct:free",  # Free, vision-capable
+            "qwen/qwen2-vl-7b-instruct:free",                 # Free, vision-capable
+            "z-ai/glm-5.3-flash",                             # Paid but cheap, real-time vision
+            "google/gemini-2.5-flash",                        # Paid fallback
+            "openai/gpt-4o-mini",                             # Paid fallback
+        ]
         vision_message = {
             "role": "user",
             "content": [
