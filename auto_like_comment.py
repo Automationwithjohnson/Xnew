@@ -453,15 +453,29 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         print(f"Length: {len(comment_content)} chars")
         print(f"--------------------------------------------------\n")
 
-        try:
-            print(f"Posting reply to {target_tweet.id} (@{target_author_handle})...")
-            await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
-            print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
-            record_processed(db_conn, target_tweet.id)
-            successful_replies += 1
-        except Exception as e:
-            print(f"Failed to post comment: {e}")
-            record_processed(db_conn, target_tweet.id)
+        posted = False
+        for attempt in range(2):  # Try up to 2 times (immediate + 1 retry on 226)
+            try:
+                print(f"Posting reply to {target_tweet.id} (@{target_author_handle})... [attempt {attempt+1}]")
+                await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
+                print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
+                record_processed(db_conn, target_tweet.id)
+                successful_replies += 1
+                posted = True
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "226" in err_str:
+                    if attempt == 0:
+                        print(f"[226] Temporary automation block. Waiting 60s then retrying once...")
+                        await asyncio.sleep(60)
+                    else:
+                        print(f"[226] Retry also blocked. Skipping without recording — will retry next batch.")
+                        # Do NOT record — let next batch retry this tweet
+                else:
+                    print(f"Failed to post comment: {e}")
+                    record_processed(db_conn, target_tweet.id)  # Non-226 errors are final
+                    break
 
         if successful_replies < max_posts:
             delay = 1 if (test_mode or max_posts == 1) else random.randint(180, 300)
