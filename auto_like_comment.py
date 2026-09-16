@@ -278,82 +278,42 @@ def deduplicate_cookies(client):
     except Exception:
         pass
 
-async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
-    db_conn = setup_database()
-    
-    try:
-        client = await setup_twitter_client()
-        my_id = "2025200557"
-        my_username = "AlayeCodes"
-        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
-    except Exception as e:
-        print(f"Failed to initialize Twitter client: {e}")
-        db_conn.close()
-        return
-
-    min_replies_needed = 0 if (test_mode or max_posts == 1) else MIN_REPLIES
+async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_id, source_label):
+    """Shared processing loop — works for any tweet list source (Following or Search)."""
     successful_replies = 0
-    max_replies_to_post = max_posts if max_posts else (1 if test_mode else 5)
-
-    tweets = []
-    print("Fetching tweets from your Following Timeline (get_latest_timeline)...")
-    deduplicate_cookies(client)
-    try:
-        timeline_tweets = await client.get_latest_timeline(count=35)
-        if timeline_tweets:
-            tweets = list(timeline_tweets)
-            print(f"Fetched {len(tweets)} tweets directly from your Following Timeline!")
-    except Exception as e:
-        print(f"get_latest_timeline failed: {e}. Trying get_timeline fallback...")
-        try:
-            timeline_tweets = await client.get_timeline(count=35)
-            if timeline_tweets:
-                tweets = list(timeline_tweets)
-        except Exception as e2:
-            print(f"Timeline fetch fallback failed: {e2}")
-
-    print(f"Total Following tweets gathered for evaluation: {len(tweets)}")
-    if not tweets:
-        print("No tweets found on Following Timeline.")
-        db_conn.close()
-        return
+    min_replies_needed = 0 if (test_mode or max_posts == 1) else MIN_REPLIES
 
     for tweet in tweets:
-        if successful_replies >= max_replies_to_post:
+        if successful_replies >= max_posts:
             break
 
-        # 1. Determine target tweet and repost wrapper
         target_tweet = tweet
         reposted_by = None
 
         if hasattr(tweet, "retweeted_status") and tweet.retweeted_status:
             reposted_by = getattr(tweet.user, "screen_name", "unknown")
             target_tweet = tweet.retweeted_status
-            print(f"\n[REPOST DETECTED] Reposted by @{reposted_by}. Targeting original tweet ID: {target_tweet.id} by @{getattr(target_tweet.user, 'screen_name', 'unknown')}")
+            print(f"\n[REPOST DETECTED] Reposted by @{reposted_by}. Targeting original: {target_tweet.id} by @{getattr(target_tweet.user, 'screen_name', 'unknown')}")
 
         target_author_id = getattr(target_tweet.user, 'id', '')
         target_author_handle = getattr(target_tweet.user, 'screen_name', 'unknown')
 
-        # Skip if our own tweet or already processed
         if str(target_author_id) == str(my_id) or is_already_processed(db_conn, target_tweet.id):
             print(f"Skipping tweet {target_tweet.id} (own tweet or already processed)")
             continue
 
-        # Check post age (<24 hours)
         tweet_time = getattr(target_tweet, "created_at_datetime", None)
         if tweet_time:
             now_utc = datetime.now(timezone.utc)
             if (now_utc - tweet_time) > timedelta(hours=24):
-                print(f"Skipping tweet {target_tweet.id} (posted {tweet_time} > 24h ago)")
+                print(f"Skipping tweet {target_tweet.id} (> 24h old)")
                 continue
 
-        # Check reply threshold
         reply_count = getattr(target_tweet, "reply_count", 0) or 0
         if reply_count < min_replies_needed:
             print(f"Skipping tweet {target_tweet.id} (replies: {reply_count} < {min_replies_needed})")
             continue
 
-        # 2. Pattern Recognition & Context Extraction
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
         is_self_quote = False
         quoted_tweet = None
@@ -367,7 +327,7 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
             else:
                 pattern_name = "Pattern 1/5: Quote Tweet"
         elif reposted_by:
-            pattern_name = f"Pattern 2: Repost of Short Text/Media (Reposted by @{reposted_by})"
+            pattern_name = f"Pattern 2: Repost (Reposted by @{reposted_by})"
         else:
             pattern_name = "Pattern 3: Standard Post / News / Media"
 
@@ -375,52 +335,45 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
             pattern_name = f"Pattern 5: Repost of Quote Tweet (Reposted by @{reposted_by})"
 
         print(f"\n==================================================")
-        print(f"TARGET MATCHED: {pattern_name}")
-        print(f"Target Tweet ID: {target_tweet.id} | Original Author: @{target_author_handle}")
-        print(f"Text Snippet: {target_tweet.text[:120]}...")
+        print(f"[{source_label}] {pattern_name}")
+        print(f"Tweet ID: {target_tweet.id} | Author: @{target_author_handle}")
+        print(f"Snippet: {target_tweet.text[:120]}...")
         print(f"==================================================")
 
-        # 3. Construct Context Payload
         context_parts = []
         if reposted_by:
-            context_parts.append(f"[Note: Reposted on timeline by @{reposted_by}]")
+            context_parts.append(f"[Note: Reposted by @{reposted_by}]")
 
         if is_self_quote and quoted_tweet:
-            context_parts.append(f"[Story Update / Follow-up by @{target_author_handle}]")
+            context_parts.append(f"[Story Update by @{target_author_handle}]")
             context_parts.append(f"Previous Post: {quoted_tweet.text}")
             context_parts.append(f"Latest Update: {target_tweet.text}")
         elif is_quote and quoted_tweet:
             quoted_handle = getattr(quoted_tweet.user, 'screen_name', 'unknown')
             context_parts.append(f"[Quote Tweet Context]")
-            context_parts.append(f"Outer Author (@{target_author_handle}): {target_tweet.text}")
-            context_parts.append(f"Quoted Inner Post (@{quoted_handle}): {quoted_tweet.text}")
+            context_parts.append(f"Outer (@{target_author_handle}): {target_tweet.text}")
+            context_parts.append(f"Quoted (@{quoted_handle}): {quoted_tweet.text}")
         else:
             context_parts.append(f"Post Text: {target_tweet.text}")
 
-        # Extract external link article context
         article_context = ""
         urls = re.findall(r'https?://[^\s]+', target_tweet.text)
-        if urls:
-            target_url = urls[0]
-            if "t.co" in target_url:
-                print(f"Scraping link context from {target_url}...")
-                article_context = scrape_article_text(target_url)
+        if urls and "t.co" in urls[0]:
+            print(f"Scraping link context from {urls[0]}...")
+            article_context = scrape_article_text(urls[0])
 
         full_payload = "\n".join(context_parts)
 
-        # 4. Like target tweet
         try:
-            print(f"Liking target tweet {target_tweet.id} by @{target_author_handle}...")
+            print(f"Liking tweet {target_tweet.id} by @{target_author_handle}...")
             await target_tweet.favorite()
-            print("Tweet liked successfully!")
+            print("Liked successfully!")
         except Exception as e:
             print(f"Like skipped/failed: {e}")
 
         await asyncio.sleep(1 if (test_mode or max_posts == 1) else random.randint(5, 15))
 
-        # 5. Generate AI comment (Pure Text)
         raw_comment = call_openrouter(full_payload, article_context=article_context)
-
         if not raw_comment:
             print("Failed to generate comment. Skipping.")
             continue
@@ -430,14 +383,12 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
             comment_content = comment_content[:242].strip() + "..."
 
         print(f"\n--------------------------------------------------")
-        print(f"DRAFTED COMMENT TO POST:")
-        print(f"\"{comment_content}\"")
+        print(f"COMMENT TO POST: \"{comment_content}\"")
         print(f"Length: {len(comment_content)} chars")
         print(f"--------------------------------------------------\n")
 
-        # 6. Post comment directly to original target tweet
         try:
-            print(f"Posting reply to target tweet {target_tweet.id} (@{target_author_handle})...")
+            print(f"Posting reply to {target_tweet.id} (@{target_author_handle})...")
             await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
             print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
             record_processed(db_conn, target_tweet.id)
@@ -446,11 +397,85 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
             print(f"Failed to post comment: {e}")
             record_processed(db_conn, target_tweet.id)
 
-        if successful_replies < max_replies_to_post:
+        if successful_replies < max_posts:
             delay = 1 if (test_mode or max_posts == 1) else random.randint(180, 300)
-            print(f"Sleeping for {delay} seconds before checking next post...")
+            print(f"Sleeping {delay}s before next post...")
             await asyncio.sleep(delay)
 
+    return successful_replies
+
+
+async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
+    db_conn = setup_database()
+
+    try:
+        client = await setup_twitter_client()
+        my_id = "2025200557"
+        my_username = "AlayeCodes"
+        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
+    except Exception as e:
+        print(f"Failed to initialize Twitter client: {e}")
+        db_conn.close()
+        return
+
+    per_source = max_posts if max_posts else (1 if test_mode else 5)
+    deduplicate_cookies(client)
+
+    # ── SOURCE 1: Following Timeline ────────────────────────────────────────
+    print("\n[SOURCE 1] Fetching from Following Timeline...")
+    following_tweets = []
+    try:
+        result = await client.get_latest_timeline(count=35)
+        if result:
+            following_tweets = list(result)
+            print(f"Fetched {len(following_tweets)} tweets from Following Timeline.")
+    except Exception as e:
+        print(f"get_latest_timeline failed: {e}. Trying fallback...")
+        try:
+            result = await client.get_timeline(count=35)
+            if result:
+                following_tweets = list(result)
+        except Exception as e2:
+            print(f"Timeline fallback also failed: {e2}")
+
+    following_count = 0
+    if following_tweets:
+        following_count = await process_tweet_list(
+            client, db_conn, following_tweets, per_source, test_mode, my_id, "FOLLOWING"
+        )
+        print(f"\n[SOURCE 1 DONE] Posted {following_count}/{per_source} comments from Following Timeline.")
+    else:
+        print("[SOURCE 1] No tweets found on Following Timeline.")
+
+    # Skip Nigeria search in single test mode
+    if test_mode or max_posts == 1:
+        db_conn.close()
+        return
+
+    # ── SOURCE 2: Nigeria Latest Search ─────────────────────────────────────
+    print("\n[SOURCE 2] Fetching Latest tweets from Nigeria search...")
+    search_tweets = []
+    try:
+        result = await client.search_tweet("nigeria", product="Latest", count=35)
+        if result:
+            search_tweets = list(result)
+            print(f"Fetched {len(search_tweets)} tweets from Nigeria search.")
+    except Exception as e:
+        print(f"Nigeria search failed: {e}")
+
+    search_count = 0
+    if search_tweets:
+        search_count = await process_tweet_list(
+            client, db_conn, search_tweets, per_source, test_mode, my_id, "NIGERIA SEARCH"
+        )
+        print(f"\n[SOURCE 2 DONE] Posted {search_count}/{per_source} comments from Nigeria search.")
+    else:
+        print("[SOURCE 2] No tweets found in Nigeria search.")
+
+    print(f"\n{'='*50}")
+    print(f"BATCH COMPLETE: {following_count + search_count} total comments posted this run.")
+    print(f"  Following Timeline: {following_count}  |  Nigeria Search: {search_count}")
+    print(f"{'='*50}")
     db_conn.close()
 
 async def main():
