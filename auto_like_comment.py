@@ -128,6 +128,16 @@ def record_processed(conn, tweet_id):
     cursor.execute("INSERT OR IGNORE INTO completed (tweet_id, processed_at) VALUES (?, ?)", (str(tweet_id), time.time()))
     conn.commit()
 
+def cleanup_old_records(conn, hours=48):
+    """Delete tweet IDs older than `hours` so the bot never runs dry on fresh targets."""
+    cutoff = time.time() - (hours * 3600)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM completed WHERE processed_at < ?", (cutoff,))
+    deleted = cursor.rowcount
+    conn.commit()
+    if deleted > 0:
+        print(f"[DB] Cleaned up {deleted} stale records older than {hours}h.")
+
 def scrape_article_text(url):
     """Scrape article page briefly to get news context for short headline tweets"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -470,6 +480,7 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
 
     per_source = max_posts if max_posts else (1 if test_mode else 5)
     deduplicate_cookies(client)
+    cleanup_old_records(db_conn)  # Purge tweet IDs older than 48h before each batch
 
     # ── SOURCE 1: Following Timeline ────────────────────────────────────────
     print("\n[SOURCE 1] Fetching from Following Timeline...")
