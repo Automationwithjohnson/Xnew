@@ -349,7 +349,11 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         target_author_id = getattr(target_tweet.user, 'id', '')
         target_author_handle = getattr(target_tweet.user, 'screen_name', 'unknown')
 
-        if str(target_author_id) == str(my_id) or is_already_processed(db_conn, target_tweet.id):
+        is_own_tweet = (
+            str(target_author_id) == str(my_id) or
+            target_author_handle.lower() == "alayecodes"
+        )
+        if is_own_tweet or is_already_processed(db_conn, target_tweet.id):
             print(f"Skipping tweet {target_tweet.id} (own tweet or already processed)")
             continue
 
