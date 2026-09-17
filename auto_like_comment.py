@@ -347,11 +347,13 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
             print(f"\n[REPOST DETECTED] Reposted by @{reposted_by}. Targeting original: {target_tweet.id} by @{getattr(target_tweet.user, 'screen_name', 'unknown')}")
 
         target_author_id = getattr(target_tweet.user, 'id', '')
-        target_author_handle = getattr(target_tweet.user, 'screen_name', 'unknown')
+        target_author_handle = getattr(target_tweet.user, 'screen_name', '') or ''
+        tweet_text = getattr(target_tweet, 'text', '') or ''
 
         is_own_tweet = (
             str(target_author_id) == str(my_id) or
-            target_author_handle.lower() == "alayecodes"
+            target_author_handle.lower() == "alayecodes" or
+            "image source:" in tweet_text.lower()  # News poster signature — always our post
         )
         if is_own_tweet or is_already_processed(db_conn, target_tweet.id):
             print(f"Skipping tweet {target_tweet.id} (own tweet or already processed)")
