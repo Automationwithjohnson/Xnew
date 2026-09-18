@@ -3,6 +3,7 @@ import re
 import sys
 import json
 import time
+import base64
 import sqlite3
 import requests
 import email.utils
@@ -16,73 +17,7 @@ from twikit import Client
 import twikit.user
 import twikit.x_client_transaction
 
-_original_user_init = twikit.user.User.__init__
-
-def safe_user_init(self, client, data: dict) -> None:
-    if isinstance(data, dict):
-        legacy = data.get('legacy')
-        if not isinstance(legacy, dict):
-            legacy = {}
-            data['legacy'] = legacy
-        
-        entities = legacy.get('entities')
-        if not isinstance(entities, dict):
-            entities = {}
-            legacy['entities'] = entities
-            
-        url_obj = entities.get('url')
-        if not isinstance(url_obj, dict):
-            entities['url'] = {}
-            
-        desc_obj = entities.get('description')
-        if not isinstance(desc_obj, dict):
-            entities['description'] = {}
-
-    try:
-        _original_user_init(self, client, data)
-    except Exception:
-        self._client = client
-        self.id = str(data.get('rest_id', '')) if isinstance(data, dict) else ''
-        self.name = data.get('core', {}).get('name', '') if isinstance(data, dict) else ''
-        self.screen_name = data.get('core', {}).get('screen_name', '') if isinstance(data, dict) else ''
-        self.profile_image_url = ""
-        self.profile_banner_url = ""
-        self.url = None
-        self.location = ""
-        self.description = ""
-        self.description_urls = []
-        self.urls = []
-        self.pinned_tweet_ids = []
-        self.is_blue_verified = False
-        self.verified = False
-        self.possibly_sensitive = False
-        self.can_dm = False
-        self.can_media_tag = False
-        self.want_retweets = False
-        self.default_profile = True
-        self.default_profile_image = True
-        self.has_custom_timelines = False
-        self.followers_count = 0
-        self.fast_followers_count = 0
-        self.normal_followers_count = 0
-        self.following_count = 0
-        self.favourites_count = 0
-        self.listed_count = 0
-        self.media_count = 0
-        self.statuses_count = 0
-        self.is_translator = False
-        self.translator_type = ''
-        self.withheld_in_countries = []
-        self.protected = False
-
-twikit.user.User.__init__ = safe_user_init
-
-async def dummy_init(self, *args, **kwargs):
-    self.key = "1234567890"
-    self.key_bytes = [0] * 16
-
-twikit.x_client_transaction.ClientTransaction.init = dummy_init
-twikit.x_client_transaction.ClientTransaction.generate_transaction_id = lambda *args, **kwargs: "1234567890"
+import twikit_patches  # Shared twikit compatibility patches (safe_user_init + ClientTransaction bypass)
 from dotenv import load_dotenv
 
 # Reconfigure stdout and stderr to use UTF-8 on Windows terminal to avoid Unicode print crashes
@@ -99,7 +34,7 @@ load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 # Configuration and Constants (with environment overrides)
 DB_PATH = os.getenv("DB_PATH", os.path.join(SCRIPT_DIR, "posted_links.db"))
 COOKIES_PATH = os.getenv("COOKIES_PATH", os.path.join(SCRIPT_DIR, "Xaccountdata.json"))
-WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "5"))
+WINDOW_MINUTES = int(os.getenv("WINDOW_MINUTES", "15"))
 MEMORY_HOURS = 18
 
 # Categories matching the old workflow
@@ -318,88 +253,102 @@ def unwrap_google_news_url(url):
     return url
 
 def scrape_webpage(url):
-    """Scrape article page for video/image media URLs and paragraph text"""
+    """Scrape article page for video/image media URLs and paragraph text. Retries once on failure."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
     media_url = None
     media_type = "image"
     fallback_image = None
     paragraphs = []
-    
+
     real_url = unwrap_google_news_url(url)
-    
-    try:
-        resp = requests.get(real_url, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            return None, "image", "", None
-            
-        soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # 1. Search for video meta tags or HTML video elements
-        og_video = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:secure_url") or soup.find("meta", attrs={"name": "twitter:player"})
-        if og_video and og_video.get("content"):
-            cand = og_video["content"].strip()
-            if cand and not cand.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                media_url = cand
+
+    resp = None
+    for attempt in range(2):
+        try:
+            resp = requests.get(real_url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                break
+            elif attempt == 0:
+                print(f"Scrape attempt 1 got HTTP {resp.status_code}. Retrying in 3s...")
+                time.sleep(3)
+                resp = None
+        except Exception as e:
+            if attempt == 0:
+                print(f"Scrape attempt 1 failed ({e}). Retrying in 3s...")
+                time.sleep(3)
+            else:
+                print(f"Scraping failed for {real_url}: {e}")
+                return None, "image", "", None
+
+    if not resp or resp.status_code != 200:
+        return None, "image", "", None
+
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # 1. Search for video meta tags or HTML video elements
+    og_video = soup.find("meta", property="og:video") or soup.find("meta", property="og:video:secure_url") or soup.find("meta", attrs={"name": "twitter:player"})
+    if og_video and og_video.get("content"):
+        cand = og_video["content"].strip()
+        if cand and not cand.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            media_url = cand
+            media_type = "video"
+
+    if not media_url:
+        for iframe in soup.find_all("iframe"):
+            src = iframe.get("src") or iframe.get("data-src") or ""
+            if any(v in src for v in ["youtube.com/embed", "youtu.be", "dailymotion.com", "vimeo.com"]):
+                media_url = src.strip()
                 media_type = "video"
+                break
 
-        if not media_url:
-            for iframe in soup.find_all("iframe"):
-                src = iframe.get("src") or iframe.get("data-src") or ""
-                if any(v in src for v in ["youtube.com/embed", "youtu.be", "dailymotion.com", "vimeo.com"]):
-                    media_url = src.strip()
+    if not media_url:
+        for video in soup.find_all("video"):
+            src = video.get("src")
+            if src:
+                media_url = src.strip()
+                media_type = "video"
+                break
+            for s in video.find_all("source"):
+                if s.get("src"):
+                    media_url = s["src"].strip()
                     media_type = "video"
                     break
 
-        if not media_url:
-            for video in soup.find_all("video"):
-                src = video.get("src")
-                if src:
-                    media_url = src.strip()
-                    media_type = "video"
-                    break
-                for s in video.find_all("source"):
-                    if s.get("src"):
-                        media_url = s["src"].strip()
-                        media_type = "video"
-                        break
-                        
-        # 2. Extract og:image as featured or fallback image
-        og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-        if og_image and og_image.get("content"):
-            img_candidate = og_image["content"].strip()
-            generic_keywords = [
-                "punch-logo", "default-logo", "placeholder", "logo-", 
-                "/logo.", "vanguardngr.com/wp-content/uploads/",
-                "googleusercontent.com", "google.com", "gstatic.com",
-                "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
-                "default_image", "no-image", "site-logo", "party-logo",
-                "pdp-logo", "apc-logo", "adc-logo", "coat-of-arms", "flag-of",
-                "graphic-logo", "banner-logo", "vector-logo", "badge-logo",
-                "party_logo", "apc_logo", "pdp_logo", "adc_logo"
+    # 2. Extract og:image as featured or fallback image
+    og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
+    if og_image and og_image.get("content"):
+        img_candidate = og_image["content"].strip()
+        generic_keywords = [
+            "punch-logo", "default-logo", "placeholder", "logo-",
+            "/logo.", "vanguardngr.com/wp-content/uploads/",
+            "googleusercontent.com", "google.com", "gstatic.com",
+            "play-lh.googleusercontent.com", "favicon", "apple-touch-icon",
+            "default_image", "no-image", "site-logo", "party-logo",
+            "pdp-logo", "apc-logo", "adc-logo", "coat-of-arms", "flag-of",
+            "graphic-logo", "banner-logo", "vector-logo", "badge-logo",
+            "party_logo", "apc_logo", "pdp_logo", "adc_logo"
+        ]
+        if not any(kw in img_candidate.lower() for kw in generic_keywords):
+            fallback_image = img_candidate
+            if not media_url:
+                media_url = img_candidate
+                media_type = "image"
+
+    # 3. Extract text paragraphs
+    for script in soup(["script", "style"]):
+        script.decompose()
+
+    for p in soup.find_all("p"):
+        p_text = clean_text(p.get_text())
+        if len(p_text) > 40 and not p_text.startswith("ID)") and not any(
+            exclude in p_text for exclude in [
+                "Read More", "Related News", "Copyright", "All rights reserved",
+                "CLICK HERE", "terms of service", "privacy policy", "subscribe to our"
             ]
-            if not any(kw in img_candidate.lower() for kw in generic_keywords):
-                fallback_image = img_candidate
-                if not media_url:
-                    media_url = img_candidate
-                    media_type = "image"
-                    
-        # 3. Extract text paragraphs
-        for script in soup(["script", "style"]):
-            script.decompose()
-            
-        for p in soup.find_all("p"):
-            p_text = clean_text(p.get_text())
-            if len(p_text) > 40 and not p_text.startswith("ID)") and not any(
-                exclude in p_text for exclude in [
-                    "Read More", "Related News", "Copyright", "All rights reserved",
-                    "CLICK HERE", "terms of service", "privacy policy", "subscribe to our"
-                ]
-            ):
-                paragraphs.append(p_text)
-                
-    except Exception as e:
-        print(f"Scraping failed for {real_url}: {e}")
-        
+        ):
+            paragraphs.append(p_text)
+
     return media_url, media_type, "\n\n".join(paragraphs), fallback_image
 
 def download_media(media_url, media_type, fallback_image_url=None):
@@ -667,7 +616,6 @@ Write the original commentary X post text now:"""
         "mistralai/mistral-7b-instruct:free",
         "nvidia/nemotron-3.5-lightning:free",
         "poolside/laguna-s-2.1:free",
-        "openrouter/free"
     ]
     if model and model not in fallback_models:
         fallback_models.insert(0, model)
@@ -972,6 +920,7 @@ async def main():
     
     if not new_articles and not bypass_time_window:
         print(f"No new articles in the last {WINDOW_MINUTES} minutes. Running fallback pass across all recent articles...")
+        existing_links = {a["link"] for a in new_articles}
         for src in SOURCES:
             try:
                 resp = requests.get(src["url"], headers=headers, timeout=15)
@@ -983,17 +932,21 @@ async def main():
                     title = entry.get("title")
                     if not link or not title:
                         continue
+                    link = link.strip()
+                    if link in existing_links:  # Skip articles already collected in first pass
+                        continue
                     cleaned_title = clean_text(title)
-                    if is_duplicate_news(db_conn, link.strip(), cleaned_title):
+                    if is_duplicate_news(db_conn, link, cleaned_title):
                         continue
                     description = entry.get("summary") or entry.get("description") or ""
                     author = entry.get("author") or entry.get("creator") or entry.get("dc:creator") or ""
                     cleaned_author = clean_text(author)
                     if cleaned_author.isdigit():
                         cleaned_author = ""
+                    existing_links.add(link)
                     new_articles.append({
                         "title": clean_text(title),
-                        "link": link.strip(),
+                        "link": link,
                         "category": src["category"],
                         "source": src["source"],
                         "author": cleaned_author,

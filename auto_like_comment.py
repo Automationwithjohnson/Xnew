@@ -14,73 +14,7 @@ from twikit import Client
 import twikit.user
 import twikit.x_client_transaction
 
-_original_user_init = twikit.user.User.__init__
-
-def safe_user_init(self, client, data: dict) -> None:
-    if isinstance(data, dict):
-        legacy = data.get('legacy')
-        if not isinstance(legacy, dict):
-            legacy = {}
-            data['legacy'] = legacy
-        
-        entities = legacy.get('entities')
-        if not isinstance(entities, dict):
-            entities = {}
-            legacy['entities'] = entities
-            
-        url_obj = entities.get('url')
-        if not isinstance(url_obj, dict):
-            entities['url'] = {}
-            
-        desc_obj = entities.get('description')
-        if not isinstance(desc_obj, dict):
-            entities['description'] = {}
-
-    try:
-        _original_user_init(self, client, data)
-    except Exception:
-        self._client = client
-        self.id = str(data.get('rest_id', '')) if isinstance(data, dict) else ''
-        self.name = data.get('core', {}).get('name', '') if isinstance(data, dict) else ''
-        self.screen_name = data.get('core', {}).get('screen_name', '') if isinstance(data, dict) else ''
-        self.profile_image_url = ""
-        self.profile_banner_url = ""
-        self.url = None
-        self.location = ""
-        self.description = ""
-        self.description_urls = []
-        self.urls = []
-        self.pinned_tweet_ids = []
-        self.is_blue_verified = False
-        self.verified = False
-        self.possibly_sensitive = False
-        self.can_dm = False
-        self.can_media_tag = False
-        self.want_retweets = False
-        self.default_profile = True
-        self.default_profile_image = True
-        self.has_custom_timelines = False
-        self.followers_count = 0
-        self.fast_followers_count = 0
-        self.normal_followers_count = 0
-        self.following_count = 0
-        self.favourites_count = 0
-        self.listed_count = 0
-        self.media_count = 0
-        self.statuses_count = 0
-        self.is_translator = False
-        self.translator_type = ''
-        self.withheld_in_countries = []
-        self.protected = False
-
-twikit.user.User.__init__ = safe_user_init
-
-async def dummy_init(self, *args, **kwargs):
-    self.key = "1234567890"
-    self.key_bytes = [0] * 16
-
-twikit.x_client_transaction.ClientTransaction.init = dummy_init
-twikit.x_client_transaction.ClientTransaction.generate_transaction_id = lambda *args, **kwargs: "1234567890"
+import twikit_patches  # Shared twikit compatibility patches (safe_user_init + ClientTransaction bypass)
 
 # Reconfigure stdout/stderr to use UTF-8 to prevent console crashes
 try:
@@ -100,7 +34,6 @@ DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
-MIN_REPLIES = 0
 
 if not API_KEY:
     print("Error: OPENROUTER_API_KEY is not set in .env file!")
@@ -139,20 +72,25 @@ def cleanup_old_records(conn, hours=48):
         print(f"[DB] Cleaned up {deleted} stale records older than {hours}h.")
 
 def scrape_article_text(url):
-    """Scrape article page briefly to get news context for short headline tweets"""
+    """Scrape article page briefly to get news context for short headline tweets. Retries once on failure."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            paragraphs = []
-            for p in soup.find_all("p"):
-                txt = p.get_text().strip()
-                if len(txt) > 30:
-                    paragraphs.append(txt)
-            return " ".join(paragraphs[:3])
-    except Exception as e:
-        print(f"Link scraping skipped: {e}")
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                paragraphs = []
+                for p in soup.find_all("p"):
+                    txt = p.get_text().strip()
+                    if len(txt) > 30:
+                        paragraphs.append(txt)
+                return " ".join(paragraphs[:3])
+        except Exception as e:
+            if attempt == 0:
+                print(f"Link scraping attempt 1 failed ({e}). Retrying in 3s...")
+                time.sleep(3)
+            else:
+                print(f"Link scraping skipped after 2 attempts: {e}")
     return ""
 
 def sanitize_ai_output(content: str) -> str:
@@ -332,8 +270,6 @@ def deduplicate_cookies(client):
 async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_id, source_label):
     """Shared processing loop — works for any tweet list source (Following or Search)."""
     successful_replies = 0
-    min_replies_needed = 0 if (test_mode or max_posts == 1) else MIN_REPLIES
-
     for tweet in tweets:
         if successful_replies >= max_posts:
             break
@@ -348,7 +284,10 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         target_author_id = getattr(target_tweet.user, 'id', '')
         target_author_handle = getattr(target_tweet.user, 'screen_name', '') or ''
-        tweet_text = getattr(target_tweet, 'text', '') or ''
+        # Use full_text — twikit returns the complete note-tweet body for long posts,
+        # falling back to text for normal tweets. tweet.text is truncated at 280 chars,
+        # which cuts off "Image Source:" on our 600-700 char news posts.
+        tweet_text = getattr(target_tweet, 'full_text', None) or getattr(target_tweet, 'text', '') or ''
 
         is_own_tweet = (
             str(target_author_id) == str(my_id) or
@@ -365,11 +304,6 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
             if (now_utc - tweet_time) > timedelta(hours=24):
                 print(f"Skipping tweet {target_tweet.id} (> 24h old)")
                 continue
-
-        reply_count = getattr(target_tweet, "reply_count", 0) or 0
-        if reply_count < min_replies_needed:
-            print(f"Skipping tweet {target_tweet.id} (replies: {reply_count} < {min_replies_needed})")
-            continue
 
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
         is_self_quote = False
@@ -428,7 +362,8 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
             for m in tweet_media:
                 media_type = getattr(m, "type", "")
                 if media_type == "photo":
-                    tweet_image_url = getattr(m, "media_url", None)
+                    # source_url gives full-resolution image; fall back to media_url
+                    tweet_image_url = getattr(m, "source_url", None) or getattr(m, "media_url", None)
                     if tweet_image_url:
                         print(f"[MEDIA] Photo detected on tweet. Will send image to vision model.")
                         break
@@ -459,7 +394,6 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         print(f"Length: {len(comment_content)} chars")
         print(f"--------------------------------------------------\n")
 
-        posted = False
         for attempt in range(2):  # Try up to 2 times (immediate + 1 retry on 226)
             try:
                 print(f"Posting reply to {target_tweet.id} (@{target_author_handle})... [attempt {attempt+1}]")
@@ -467,7 +401,6 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
                 print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
                 record_processed(db_conn, target_tweet.id)
                 successful_replies += 1
-                posted = True
                 break
             except Exception as e:
                 err_str = str(e)
