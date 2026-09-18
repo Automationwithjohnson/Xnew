@@ -484,7 +484,7 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
                     break
 
         if successful_replies < max_posts:
-            delay = 1 if (test_mode or max_posts == 1) else random.randint(180, 300)
+            delay = 1 if (test_mode or max_posts == 1) else random.randint(90, 150)
             print(f"Sleeping {delay}s before next post...")
             await asyncio.sleep(delay)
 
