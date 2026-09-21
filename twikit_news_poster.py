@@ -47,9 +47,18 @@ CATEGORIES = {
     "Tech": "TECH"
 }
 
-# Curated publisher feed — Nairametrics as primary/exclusive source
+# Curated Premium Native Publisher RSS Feeds (Nairametrics removed)
 SOURCES = [
-    {"category": "General", "source": "Nairametrics", "url": "https://nairametrics.com/feed/"},
+    {"category": "Breaking", "source": "BBC Africa", "url": "http://feeds.bbci.co.uk/news/world/africa/rss.xml"},
+    {"category": "General", "source": "Punch Nigeria", "url": "https://punchng.com/feed/"},
+    {"category": "General", "source": "Vanguard News", "url": "https://www.vanguardngr.com/feed/"},
+    {"category": "General", "source": "Premium Times", "url": "https://www.premiumtimesng.com/feed"},
+    {"category": "General", "source": "Sahara Reporters", "url": "https://saharareporters.com/feed/"},
+    {"category": "Politics", "source": "The Nation", "url": "https://thenationonlineng.net/feed/"},
+    {"category": "Politics", "source": "Guardian Nigeria", "url": "https://guardian.ng/feed/"},
+    {"category": "Politics", "source": "The Cable", "url": "https://www.thecable.ng/feed/"},
+    {"category": "Sports", "source": "Complete Sports", "url": "https://www.completesports.com/feed/"},
+    {"category": "Tech", "source": "TechCabal", "url": "https://techcabal.com/feed/"}
 ]
 
 def setup_database():
@@ -195,7 +204,7 @@ def score_article(article, body_text=""):
         score += 2
         
     # Premium Source (+2)
-    if article.get("source") in ["BBC Africa", "Premium Times", "The Cable", "Nairametrics"]:
+    if article.get("source") in ["BBC Africa", "Premium Times", "The Cable"]:
         score += 2
         
     # Low Value Penalty (-2)
