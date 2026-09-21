@@ -47,19 +47,9 @@ CATEGORIES = {
     "Tech": "TECH"
 }
 
-# 11 Curated Premium Native Publisher RSS Feeds (Cut Pulse, PM News, Tribune, Daily Post)
+# Curated publisher feed — Nairametrics as primary/exclusive source
 SOURCES = [
-    {"category": "Breaking", "source": "BBC Africa", "url": "http://feeds.bbci.co.uk/news/world/africa/rss.xml"},
     {"category": "General", "source": "Nairametrics", "url": "https://nairametrics.com/feed/"},
-    {"category": "General", "source": "Punch Nigeria", "url": "https://punchng.com/feed/"},
-    {"category": "General", "source": "Vanguard News", "url": "https://www.vanguardngr.com/feed/"},
-    {"category": "General", "source": "Premium Times", "url": "https://www.premiumtimesng.com/feed"},
-    {"category": "General", "source": "Sahara Reporters", "url": "https://saharareporters.com/feed/"},
-    {"category": "Politics", "source": "The Nation", "url": "https://thenationonlineng.net/feed/"},
-    {"category": "Politics", "source": "Guardian Nigeria", "url": "https://guardian.ng/feed/"},
-    {"category": "Politics", "source": "The Cable", "url": "https://www.thecable.ng/feed/"},
-    {"category": "Sports", "source": "Complete Sports", "url": "https://www.completesports.com/feed/"},
-    {"category": "Tech", "source": "TechCabal", "url": "https://techcabal.com/feed/"}
 ]
 
 def setup_database():
