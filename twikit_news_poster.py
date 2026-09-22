@@ -507,7 +507,7 @@ def call_openrouter(title, text, source, author, category, quote=None):
         print("[Warning] OPENROUTER_API_KEY is not set.")
         return None
         
-    model = os.getenv("OPENROUTER_MODEL", "nex-agi/nex-n2.5-mini:free")
+    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
     
     quote_rule = f"\nDirect Quote in Article: \"{quote}\"" if quote else ""
 
@@ -608,13 +608,11 @@ Write the original commentary X post text now:"""
     }
     
     fallback_models = [
-        "nex-agi/nex-n2.5-mini:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "qwen/qwen-2.5-72b-instruct:free",
-        "google/gemini-2.0-flash-lite-001",
-        "mistralai/mistral-7b-instruct:free",
-        "nvidia/nemotron-3.5-lightning:free",
-        "poolside/laguna-s-2.1:free",
+        "meta-llama/llama-3.3-70b-instruct",
+        "google/gemini-2.5-flash",
+        "deepseek/deepseek-chat",
+        "openai/gpt-4o-mini",
+        "z-ai/glm-5.3-flash"
     ]
     if model and model not in fallback_models:
         fallback_models.insert(0, model)
