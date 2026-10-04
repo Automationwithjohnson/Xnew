@@ -64,19 +64,23 @@ twikit.x_client_transaction.ClientTransaction.init = _dummy_init
 twikit.x_client_transaction.ClientTransaction.generate_transaction_id = lambda *args, **kwargs: '1234567890'
 
 # Patch GraphQL search_timeline from GET to POST to avoid X 404 error
-import twikit.client.gql
-from twikit.client.gql import Endpoint, SEARCH_TIMELINE_FEATURES
+try:
+    import twikit.client.gql
+    from twikit.client.gql import Endpoint
 
-async def _patched_search_timeline(self, query: str, product: str, count: int, cursor: str | None = None):
-    variables = {
-        'rawQuery': query,
-        'count': count,
-        'querySource': 'typed_query',
-        'product': product,
-        'withGrokTranslatedBio': True
-    }
-    if cursor is not None:
-        variables['cursor'] = cursor
-    return await self.gql_post(Endpoint.SEARCH_TIMELINE, variables, SEARCH_TIMELINE_FEATURES)
+    async def _patched_search_timeline(self, query: str, product: str, count: int, cursor: str | None = None):
+        variables = {
+            'rawQuery': query,
+            'count': count,
+            'querySource': 'typed_query',
+            'product': product,
+            'withGrokTranslatedBio': True
+        }
+        if cursor is not None:
+            variables['cursor'] = cursor
+        features = getattr(twikit.client.gql, 'SEARCH_TIMELINE_FEATURES', getattr(twikit.client.gql, 'FEATURES', None))
+        return await self.gql_post(Endpoint.SEARCH_TIMELINE, variables, features)
 
-twikit.client.gql.GQLClient.search_timeline = _patched_search_timeline
+    twikit.client.gql.GQLClient.search_timeline = _patched_search_timeline
+except Exception as _patch_err:
+    print(f"Failed to patch search_timeline: {_patch_err}")
