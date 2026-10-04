@@ -113,11 +113,13 @@ def trigger_comment():
     return {"message": "Manual commenter triggered!"}, 200
 
 if __name__ == "__main__":
-    t1 = threading.Thread(target=run_news_loop, daemon=True)
+    # News poster disabled — system is dedicated 100% to auto like & high-converting comment workflows
+    # t1 = threading.Thread(target=run_news_loop, daemon=True)
+    # t1.start()
+    
     t2 = threading.Thread(target=run_commenter_loop, daemon=True)
     t3 = threading.Thread(target=run_keep_alive_loop, daemon=True)
     
-    t1.start()
     t2.start()
     t3.start()
     

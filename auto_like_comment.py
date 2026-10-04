@@ -28,12 +28,36 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(dotenv_path=os.path.join(SCRIPT_DIR, ".env"))
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("OPENROUTER_MODEL", "nex-agi/nex-n2.5-mini:free")
+MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
 COOKIES_PATH = os.getenv("COOKIES_PATH", "Xaccountdata.json")
 DB_PATH = "liked_comments.db"
 
 # Target configuration
 LOOP_INTERVAL_MINUTES = 30
+
+# 10 Dynamic Buyer Intent Rotation Buckets targeting business owners
+BUYER_ROTATION_BUCKETS = [
+    # Bucket 1: Zapier & Make Bill Shock (Fastest Migration Deals)
+    '(zapier expensive OR "zapier pricing" OR "zapier bill" OR "switch from zapier" OR "zapier alternative" OR "zapier task limit" OR "make.com operations") lang:en -giveaway -crypto -nigeria -filter:retweets',
+    # Bucket 2: Agency & B2B Lead Scraping / Enrichment ($1k–$3k deals)
+    '("scrape leads" OR "lead enrichment workflow" OR "clay table" OR "apollo scrape" OR "cold email workflow" OR "enriching leads") min_faves:1 lang:en -crypto -nigeria -filter:retweets',
+    # Bucket 3: CRM Synchronization & Data Entry Nightmares
+    '("manual data entry" OR "sync hubspot" OR "notion crm sync" OR "airtable webhook" OR "crm sync broken" OR "copying data between") lang:en -giveaway -nigeria -filter:retweets',
+    # Bucket 4: Client Onboarding & Invoicing Bottlenecks
+    '("automate onboarding" OR "client onboarding workflow" OR "stripe invoice workflow" OR "contract signature automation" OR "onboarding takes hours") lang:en -crypto -nigeria -filter:retweets',
+    # Bucket 5: E-Commerce & DTC Fulfillment (Shopify / Stripe)
+    '("shopify webhook" OR "abandoned cart automation" OR "inventory sync airtable" OR "order tracking whatsapp" OR "automate fulfillment") lang:en -giveaway -nigeria -filter:retweets',
+    # Bucket 6: AI Customer Support & Ticket Triage
+    '("automate customer support" OR "ai support bot" OR "zendesk webhook" OR "intercom automation" OR "ai triage tickets" OR "slack support bot") lang:en -crypto -nigeria -filter:retweets',
+    # Bucket 7: Speed-to-Lead & High-Ticket Booking (Real Estate & Clinics)
+    '("automate booking" OR "calendly webhook" OR "instant lead response" OR "speed to lead" OR "missed call text back" OR "qualify inbound") lang:en -nigeria -filter:retweets',
+    # Bucket 8: Content & Media Repurposing Engines
+    '("automate content repurposing" OR "transcribe podcast workflow" OR "automate newsletter" OR "repurpose video workflow") min_faves:2 lang:en -nigeria -filter:retweets',
+    # Bucket 9: Overwhelmed Founder Burnout (Immediate Relief)
+    '("drowning in admin work" OR "spending hours on manual tasks" OR "repetitive tasks killing my time" OR "need to automate my business") lang:en -giveaway -nigeria -filter:retweets',
+    # Bucket 10: Explicit Hiring & Freelance Signals (Immediate Cash Deals)
+    '("need an automation" OR "looking for n8n" OR "hire n8n" OR "hire zapier expert" OR "recommend an automation expert" OR "anyone know n8n") lang:en -nigeria -filter:retweets',
+]
 
 if not API_KEY:
     print("Error: OPENROUTER_API_KEY is not set in .env file!")
@@ -111,9 +135,11 @@ def sanitize_ai_output(content: str) -> str:
             break
     # Remove quotes & backticks
     content = content.replace('"', '').replace('`', '').strip()
-    # Replace dashes/em-dashes/en-dashes with simple spaces/commas as per user rule
+    # Replace dashes/em-dashes/en-dashes with simple spaces/commas
     content = content.replace('—', ', ').replace('–', ', ').replace('-', ' ')
-    # Clean multiple spaces
+    # Strip disallowed punctuation: ! ? : ;
+    content = content.replace('!', '.').replace('?', '.').replace(':', ',').replace(';', ',')
+    content = re.sub(r'\.+', '.', content)
     content = re.sub(r'\s+', ' ', content).strip()
     return content
 
@@ -122,23 +148,18 @@ def call_openrouter(x_post_text, article_context="", image_url=None):
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
 
-    prompt = f"""You are a smart, insightful, and adaptable commentator on X. Your style is conversational, knowledgeable, friendly, and street-smart. You seamlessly adapt your commentary to WHATEVER content, topic, or niche you encounter (tech, AI, business, finance, news, sports, culture, design, or daily observations).
+    prompt = f"""You are a senior automation systems architect specializing in n8n and scalable business workflows. You advise founders, agency owners, and operators on cutting costs and eliminating manual data tasks.
 
 Task:
-Analyze the X post payload below (which may include outer commentary, quoted tweets, story updates, or repost context) and write a short, sharp, highly relevant reply directly under the post.
+Analyze the X post payload below and write a short, sharp, highly insightful reply that provides immediate technical clarity or architectural advice on how automation solves the problem.
 
 Rules:
-- Universal Adaptation & Strict Relevance: Your reply MUST directly adapt to and address the specific content, facts, or story of the post. If it is news, crime, tech, or culture, give a smart, engaging reaction.
-- Natural Integration: Never force pre-written pitches. Do not advertise unless 100% appropriate.
-- Length Constraint: The entire reply MUST be under {ai_limit} characters. Keep it brief.
-- Simple English Constraint: Write in clear, simple English that even a kid can understand.
-- Punctuation Constraint: Do not use em dashes (—) or en dashes (–) anywhere. ONLY use standard commas (,) and periods/full stops (.) for punctuation. Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes anywhere in your text. Do not ask any questions at the end of your reply.
-- Add real value: Speak like someone who understands real-world facts and human nature.
-- Style Variation: Vary your opening style. Sometimes start with a strong opinion, sometimes with a surprising observation.
-- Sound natural and conversational.
-
-Output Format:
-CRITICAL: Output ONLY the exact reply text. Do not include any headers, labels, intros, or explanations. You MUST NOT start with "Here is my reply:" or output any thoughts. Output ONLY the comment itself.
+- Deep Relevance: Address the specific friction, bottleneck, or tool mentioned in the post. If they mention Zapier cost, manual data entry, CRM chaos, or lead scraping, mention the exact architectural fix like self-hosted n8n or webhook pipelines.
+- Zero Sales Pitch: Never say 'DM me', 'hire me', 'check my bio', 'I can help', or ask them to reach out. Provide pure, credible value so founders respect your expertise naturally.
+- Length Constraint: The entire reply MUST be strictly under {ai_limit} characters. Keep it brief.
+- Simple English: Write in plain, clear English that anyone can read in three seconds.
+- Punctuation Constraint: Do not use em dashes or en dashes anywhere. ONLY use standard commas (,) and periods (.). Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes (-) anywhere in your text. Do not ask any question at the end of your reply.
+- Output Format: Output ONLY the exact reply text. No intros, no quotation marks, no thinking tags, and no labels.
 
 Here is the X post payload:
 {x_post_text}{context_str}"""
@@ -192,7 +213,6 @@ Here is the X post payload:
 
     # ── TEXT-ONLY PATH (also fallback when vision fails) ─────────────────────
     fallback_models = [
-        "nex-agi/nex-n2.5-mini:free",
         "meta-llama/llama-3.3-70b-instruct",
         "google/gemini-2.5-flash",
         "openai/gpt-4o-mini",
@@ -467,34 +487,43 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
     else:
         print("[SOURCE 1] No tweets found on Following Timeline.")
 
-    # Skip Nigeria search in single test mode
+    # Skip buyer search in single test mode
     if test_mode or max_posts == 1:
         db_conn.close()
         return
 
-    # ── SOURCE 2: Nigeria Latest Search ─────────────────────────────────────
-    print("\n[SOURCE 2] Fetching Latest tweets from Nigeria search...")
-    search_tweets = []
-    try:
-        result = await client.search_tweet("nigeria", product="Latest", count=35)
-        if result:
-            search_tweets = list(result)
-            print(f"Fetched {len(search_tweets)} tweets from Nigeria search.")
-    except Exception as e:
-        print(f"Nigeria search failed: {e}")
-
+    # ── SOURCE 2: High-Intent Buyer Buckets Rotation ────────────────────────
+    selected_buckets = random.sample(BUYER_ROTATION_BUCKETS, min(2, len(BUYER_ROTATION_BUCKETS)))
     search_count = 0
-    if search_tweets:
-        search_count = await process_tweet_list(
-            client, db_conn, search_tweets, per_source, test_mode, my_id, "NIGERIA SEARCH"
-        )
-        print(f"\n[SOURCE 2 DONE] Posted {search_count}/{per_source} comments from Nigeria search.")
-    else:
-        print("[SOURCE 2] No tweets found in Nigeria search.")
+    for idx, bucket_query in enumerate(selected_buckets, 1):
+        print(f"\n[SOURCE 2 - BUCKET {idx}] Querying buyer intent: {bucket_query[:65]}...")
+        bucket_tweets = []
+        try:
+            # Query Top tweets first for high-authority discussions, fallback to Latest
+            result = await client.search_tweet(bucket_query, product="Top", count=25)
+            if result:
+                bucket_tweets = list(result)
+            if not bucket_tweets:
+                result = await client.search_tweet(bucket_query, product="Latest", count=25)
+                if result:
+                    bucket_tweets = list(result)
+            print(f"Fetched {len(bucket_tweets)} candidate tweets in bucket {idx}.")
+        except Exception as e:
+            print(f"Buyer search for bucket {idx} failed: {e}")
+
+        if bucket_tweets:
+            bucket_quota = max(1, per_source // len(selected_buckets))
+            count = await process_tweet_list(
+                client, db_conn, bucket_tweets, bucket_quota, test_mode, my_id, f"BUYER BUCKET {idx}"
+            )
+            search_count += count
+            print(f"[BUCKET {idx} DONE] Posted {count}/{bucket_quota} comments.")
+        else:
+            print(f"[BUCKET {idx}] No tweets found for query.")
 
     print(f"\n{'='*50}")
     print(f"BATCH COMPLETE: {following_count + search_count} total comments posted this run.")
-    print(f"  Following Timeline: {following_count}  |  Nigeria Search: {search_count}")
+    print(f"  Following Timeline: {following_count}  |  Buyer Intent Searches: {search_count}")
     print(f"{'='*50}")
     db_conn.close()
 
