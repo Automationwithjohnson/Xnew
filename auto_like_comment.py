@@ -279,7 +279,6 @@ def deduplicate_cookies(client):
 async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_id, source_label):
     """Shared processing loop — works for any tweet list source (Following or Search)."""
     successful_replies = 0
-    batch_authors = set()
     for tweet in tweets:
         if successful_replies >= max_posts:
             break
@@ -314,14 +313,6 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         if is_already_processed(db_conn, target_tweet.id):
             print(f"Skipping tweet {target_tweet.id} (tweet already processed)")
-            continue
-
-        if target_author_handle.lower() in batch_authors:
-            print(f"Skipping tweet {target_tweet.id} (@{target_author_handle} already commented on in this batch)")
-            continue
-
-        if is_author_recently_commented(db_conn, target_author_id, target_author_handle, hours=12):
-            print(f"Skipping tweet {target_tweet.id} (@{target_author_handle} already commented on in last 12h)")
             continue
 
         tweet_time = getattr(target_tweet, "created_at_datetime", None)
@@ -421,7 +412,6 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
                 await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
                 print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
                 record_processed(db_conn, target_tweet.id, author_id=target_author_id, author_handle=target_author_handle)
-                batch_authors.add(target_author_handle.lower())
                 successful_replies += 1
                 break
             except Exception as e:
