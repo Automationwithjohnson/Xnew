@@ -85,8 +85,8 @@ def record_processed(conn, tweet_id):
     cursor.execute("INSERT OR IGNORE INTO completed (tweet_id, processed_at) VALUES (?, ?)", (str(tweet_id), time.time()))
     conn.commit()
 
-def cleanup_old_records(conn, hours=48):
-    """Delete tweet IDs older than `hours` so the bot never runs dry on fresh targets."""
+def cleanup_old_records(conn, hours=168):
+    """Delete tweet IDs older than `hours` (default 7 days) so the bot never re-comments on past posts."""
     cutoff = time.time() - (hours * 3600)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM completed WHERE processed_at < ?", (cutoff,))
@@ -148,17 +148,18 @@ def call_openrouter(x_post_text, article_context="", image_url=None):
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
 
-    prompt = f"""You are a senior automation systems architect specializing in n8n and scalable business workflows. You advise founders, agency owners, and operators on cutting costs and eliminating manual data tasks.
+    prompt = f"""You are a perceptive, insightful, and adaptable commentator on X. You participate in discussions under major accounts, breaking news aggregators, journalists, and public figures.
 
 Task:
-Analyze the X post payload below and write a short, sharp, highly insightful reply that provides immediate technical clarity or architectural advice on how automation solves the problem.
+Analyze the X post payload below and write a short, sharp, highly engaging comment directly reacting to the post.
 
 Rules:
-- Deep Relevance: Address the specific friction, bottleneck, or tool mentioned in the post. If they mention Zapier cost, manual data entry, CRM chaos, or lead scraping, mention the exact architectural fix like self-hosted n8n or webhook pipelines.
-- Zero Sales Pitch: Never say 'DM me', 'hire me', 'check my bio', 'I can help', or ask them to reach out. Provide pure, credible value so founders respect your expertise naturally.
+- Generalist Adaptability: Seamlessly adapt your tone and thought to whatever the post is about. If it is breaking world news, conflict, or crime, give a grounded, sensible observation. If it is politics, business, tech, or daily human events, offer a smart, relatable take.
+- Authenticity: Sound like an observant, thoughtful human who understands how the world works. Never sound generic or like a canned bot.
+- Zero Self-Promotion: Do not promote services, tools, or links. Never say 'DM me', 'check my bio', or 'I can help'. Focus 100% on the story in front of you.
 - Length Constraint: The entire reply MUST be strictly under {ai_limit} characters. Keep it brief.
-- Simple English: Write in plain, clear English that anyone can read in three seconds.
-- Punctuation Constraint: Do not use em dashes or en dashes anywhere. ONLY use standard commas (,) and periods (.). Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes (-) anywhere in your text. Do not ask any question at the end of your reply.
+- Simple English: Write in clear, plain English that anyone can read in three seconds.
+- Punctuation Constraint: Do not use em dashes or en dashes anywhere. ONLY use standard commas (,) and periods (.). Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes (-) anywhere in your text. Do not ask any questions at the end of your reply.
 - Output Format: Output ONLY the exact reply text. No intros, no quotation marks, no thinking tags, and no labels.
 
 Here is the X post payload:
@@ -304,10 +305,14 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         target_author_id = getattr(target_tweet.user, 'id', '')
         target_author_handle = getattr(target_tweet.user, 'screen_name', '') or ''
-        # Use full_text — twikit returns the complete note-tweet body for long posts,
-        # falling back to text for normal tweets. tweet.text is truncated at 280 chars,
-        # which cuts off "Image Source:" on our 600-700 char news posts.
-        tweet_text = getattr(target_tweet, 'full_text', None) or getattr(target_tweet, 'text', '') or ''
+        # Extract full, expanded text including "Show more" note tweets
+        note_text = ""
+        if hasattr(target_tweet, '_note_tweet_results') and target_tweet._note_tweet_results:
+            try:
+                note_text = target_tweet._note_tweet_results.get('result', {}).get('text', '')
+            except Exception:
+                pass
+        tweet_text = note_text or getattr(target_tweet, 'full_text', None) or getattr(target_tweet, 'text', '') or ''
 
         is_own_tweet = (
             str(target_author_id) == str(my_id) or
@@ -321,17 +326,28 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         tweet_time = getattr(target_tweet, "created_at_datetime", None)
         if tweet_time:
             now_utc = datetime.now(timezone.utc)
-            if (now_utc - tweet_time) > timedelta(hours=24):
-                print(f"Skipping tweet {target_tweet.id} (> 24h old)")
+            age = now_utc - tweet_time
+            if age > timedelta(hours=1):
+                age_mins = int(age.total_seconds() // 60)
+                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 1h limit)")
                 continue
 
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
         is_self_quote = False
         quoted_tweet = None
+        quoted_text = ""
 
         if is_quote:
             quoted_tweet = target_tweet.quoted_status
             quoted_author_id = getattr(quoted_tweet.user, 'id', '')
+            q_note = ""
+            if hasattr(quoted_tweet, '_note_tweet_results') and quoted_tweet._note_tweet_results:
+                try:
+                    q_note = quoted_tweet._note_tweet_results.get('result', {}).get('text', '')
+                except Exception:
+                    pass
+            quoted_text = q_note or getattr(quoted_tweet, 'full_text', None) or getattr(quoted_tweet, 'text', '') or ''
+
             if str(target_author_id) == str(quoted_author_id):
                 is_self_quote = True
                 pattern_name = "Pattern 4: Self-Quote / Thread Story Update"
@@ -348,7 +364,7 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         print(f"\n==================================================")
         print(f"[{source_label}] {pattern_name}")
         print(f"Tweet ID: {target_tweet.id} | Author: @{target_author_handle}")
-        print(f"Snippet: {target_tweet.text[:120]}...")
+        print(f"Snippet: {tweet_text[:120]}...")
         print(f"==================================================")
 
         context_parts = []
@@ -357,18 +373,18 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
 
         if is_self_quote and quoted_tweet:
             context_parts.append(f"[Story Update by @{target_author_handle}]")
-            context_parts.append(f"Previous Post: {quoted_tweet.text}")
-            context_parts.append(f"Latest Update: {target_tweet.text}")
+            context_parts.append(f"Previous Post: {quoted_text}")
+            context_parts.append(f"Latest Update: {tweet_text}")
         elif is_quote and quoted_tweet:
             quoted_handle = getattr(quoted_tweet.user, 'screen_name', 'unknown')
             context_parts.append(f"[Quote Tweet Context]")
-            context_parts.append(f"Outer (@{target_author_handle}): {target_tweet.text}")
-            context_parts.append(f"Quoted (@{quoted_handle}): {quoted_tweet.text}")
+            context_parts.append(f"Outer (@{target_author_handle}): {tweet_text}")
+            context_parts.append(f"Quoted (@{quoted_handle}): {quoted_text}")
         else:
-            context_parts.append(f"Post Text: {target_tweet.text}")
+            context_parts.append(f"Post Text: {tweet_text}")
 
         article_context = ""
-        urls = re.findall(r'https?://[^\s]+', target_tweet.text)
+        urls = re.findall(r'https?://[^\s]+', tweet_text)
         if urls and "t.co" in urls[0]:
             print(f"Scraping link context from {urls[0]}...")
             article_context = scrape_article_text(urls[0])
@@ -465,14 +481,14 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
     print("\n[SOURCE 1] Fetching from Following Timeline...")
     following_tweets = []
     try:
-        result = await client.get_latest_timeline(count=35)
+        result = await client.get_latest_timeline(count=50)
         if result:
             following_tweets = list(result)
             print(f"Fetched {len(following_tweets)} tweets from Following Timeline.")
     except Exception as e:
         print(f"get_latest_timeline failed: {e}. Trying fallback...")
         try:
-            result = await client.get_timeline(count=35)
+            result = await client.get_timeline(count=50)
             if result:
                 following_tweets = list(result)
         except Exception as e2:
