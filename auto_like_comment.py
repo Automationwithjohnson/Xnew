@@ -69,9 +69,20 @@ def setup_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS completed (
             tweet_id TEXT UNIQUE,
-            processed_at REAL
+            processed_at REAL,
+            author_id TEXT,
+            author_handle TEXT
         )
     """)
+    # Ensure columns exist if table was created previously without them
+    try:
+        cursor.execute("ALTER TABLE completed ADD COLUMN author_id TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE completed ADD COLUMN author_handle TEXT")
+    except Exception:
+        pass
     conn.commit()
     return conn
 
@@ -80,9 +91,25 @@ def is_already_processed(conn, tweet_id):
     cursor.execute("SELECT 1 FROM completed WHERE tweet_id = ?", (str(tweet_id),))
     return cursor.fetchone() is not None
 
-def record_processed(conn, tweet_id):
+def is_author_recently_commented(conn, author_id, author_handle, hours=12):
+    """Check if this author profile was already commented on within the last `hours` (default 12h)."""
+    if not author_id and not author_handle:
+        return False
+    cutoff = time.time() - (hours * 3600)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO completed (tweet_id, processed_at) VALUES (?, ?)", (str(tweet_id), time.time()))
+    cursor.execute("""
+        SELECT 1 FROM completed 
+        WHERE (author_id = ? OR LOWER(author_handle) = LOWER(?)) 
+          AND processed_at > ?
+    """, (str(author_id or ''), str(author_handle or ''), cutoff))
+    return cursor.fetchone() is not None
+
+def record_processed(conn, tweet_id, author_id="", author_handle=""):
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO completed (tweet_id, processed_at, author_id, author_handle) 
+        VALUES (?, ?, ?, ?)
+    """, (str(tweet_id), time.time(), str(author_id), str(author_handle)))
     conn.commit()
 
 def cleanup_old_records(conn, hours=168):
@@ -252,6 +279,7 @@ def deduplicate_cookies(client):
 async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_id, source_label):
     """Shared processing loop — works for any tweet list source (Following or Search)."""
     successful_replies = 0
+    batch_authors = set()
     for tweet in tweets:
         if successful_replies >= max_posts:
             break
@@ -280,8 +308,20 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
             target_author_handle.lower() == "alayecodes" or
             "image source:" in tweet_text.lower()  # News poster signature — always our post
         )
-        if is_own_tweet or is_already_processed(db_conn, target_tweet.id):
-            print(f"Skipping tweet {target_tweet.id} (own tweet or already processed)")
+        if is_own_tweet:
+            print(f"Skipping tweet {target_tweet.id} (own tweet)")
+            continue
+
+        if is_already_processed(db_conn, target_tweet.id):
+            print(f"Skipping tweet {target_tweet.id} (tweet already processed)")
+            continue
+
+        if target_author_handle.lower() in batch_authors:
+            print(f"Skipping tweet {target_tweet.id} (@{target_author_handle} already commented on in this batch)")
+            continue
+
+        if is_author_recently_commented(db_conn, target_author_id, target_author_handle, hours=12):
+            print(f"Skipping tweet {target_tweet.id} (@{target_author_handle} already commented on in last 12h)")
             continue
 
         tweet_time = getattr(target_tweet, "created_at_datetime", None)
@@ -380,7 +420,8 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
                 print(f"Posting reply to {target_tweet.id} (@{target_author_handle})... [attempt {attempt+1}]")
                 await client.create_tweet(text=comment_content, reply_to=target_tweet.id)
                 print(">>> COMMENT POSTED SUCCESSFULLY ON X! <<<")
-                record_processed(db_conn, target_tweet.id)
+                record_processed(db_conn, target_tweet.id, author_id=target_author_id, author_handle=target_author_handle)
+                batch_authors.add(target_author_handle.lower())
                 successful_replies += 1
                 break
             except Exception as e:
@@ -394,7 +435,7 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
                         # Do NOT record — let next batch retry this tweet
                 else:
                     print(f"Failed to post comment: {e}")
-                    record_processed(db_conn, target_tweet.id)  # Non-226 errors are final
+                    record_processed(db_conn, target_tweet.id, author_id=target_author_id, author_handle=target_author_handle)
                     break
 
         if successful_replies < max_posts:
