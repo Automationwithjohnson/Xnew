@@ -33,7 +33,7 @@ COOKIES_PATH = os.getenv("COOKIES_PATH", "Xaccountdata.json")
 DB_PATH = "liked_comments.db"
 
 # Target configuration
-LOOP_INTERVAL_MINUTES = 30
+LOOP_INTERVAL_MINUTES = 6
 
 # 10 Dynamic Buyer Intent Rotation Buckets targeting business owners
 BUYER_ROTATION_BUCKETS = [
@@ -175,17 +175,18 @@ def call_openrouter(x_post_text, article_context=""):
     
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
 
-    prompt = f"""You are a perceptive, insightful, and adaptable commentator on X. You participate in discussions under major accounts, breaking news aggregators, journalists, and public figures.
+    prompt = f"""You are a sharp, provocative, and contrarian commentator on X. Your goal is to write high-engagement comments that spark debate, stir strong emotions, and make people passionately agree or vigorously argue.
 
 Task:
-Analyze the X post payload below and write a short, sharp, highly engaging comment directly reacting to the post.
+Analyze the X post payload below and write a short, punchy, provocative take directly under the post.
 
 Rules:
-- Generalist Adaptability: Seamlessly adapt your tone and thought to whatever the post is about. If it is breaking world news, conflict, or crime, give a grounded, sensible observation. If it is politics, business, tech, or daily human events, offer a smart, relatable take.
-- Authenticity: Sound like an observant, thoughtful human who understands how the world works. Never sound generic or like a canned bot.
-- Zero Self-Promotion: Do not promote services, tools, or links. Never say 'DM me', 'check my bio', or 'I can help'. Focus 100% on the story in front of you.
+- High-Impact Contrarian Stance: Never give a bland summary or neutral observation. Call out blatant hypocrisy, point out the uncomfortable double standard, challenge the popular emotional narrative, or say the blunt truth people are avoiding.
+- Sarcastic or Cynical Edge: Use biting realism or sharp irony when appropriate. Expose human greed, media manipulation, political theater, or fake internet outrage.
+- Zero Cliches & Zero Preachiness: Do not lecture or sound like a moralist. Speak with cold, street-smart confidence.
+- Zero Self-Promotion: Never mention services, tools, or links. Never say 'DM me' or 'check my bio'. Focus 100% on dropping a viral take on the topic.
 - Length Constraint: The entire reply MUST be strictly under {ai_limit} characters. Keep it brief.
-- Simple English: Write in clear, plain English that anyone can read in three seconds.
+- Simple English: Write in plain, clear, conversational English.
 - Punctuation Constraint: Do not use em dashes or en dashes anywhere. ONLY use standard commas (,) and periods (.). Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes (-) anywhere in your text. Do not ask any questions at the end of your reply.
 - Output Format: Output ONLY the exact reply text. No intros, no quotation marks, no thinking tags, and no labels.
 
@@ -319,9 +320,9 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         if tweet_time:
             now_utc = datetime.now(timezone.utc)
             age = now_utc - tweet_time
-            if age > timedelta(hours=1):
+            if age > timedelta(minutes=25):
                 age_mins = int(age.total_seconds() // 60)
-                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 1h limit)")
+                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 25m limit)")
                 continue
 
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
@@ -449,7 +450,7 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
         db_conn.close()
         return
 
-    per_source = max_posts if max_posts else (1 if test_mode else 5)
+    per_source = max_posts if max_posts else (1 if test_mode else 2)
     deduplicate_cookies(client)
     cleanup_old_records(db_conn)  # Purge tweet IDs older than 48h before each batch
 
