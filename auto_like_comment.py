@@ -295,8 +295,8 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         tweet_text = note_text or getattr(target_tweet, 'full_text', None) or getattr(target_tweet, 'text', '') or ''
 
         is_own_tweet = (
-            str(target_author_id) == str(my_id) or
-            target_author_handle.lower() == "alayecodes" or
+            (my_id and str(target_author_id) == str(my_id)) or
+            target_author_handle.lower() in ["alayecodes", "groundtruthdesk"] or
             "image source:" in tweet_text.lower()  # News poster signature — always our post
         )
         if is_own_tweet:
@@ -439,9 +439,22 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
 
     try:
         client = await setup_twitter_client()
-        my_id = "2025200557"
-        my_username = "AlayeCodes"
-        print(f"Twitter client initialized for @{my_username} (ID: {my_id})")
+        my_id = "1769380125886533632"
+        my_username = ""
+        try:
+            twid_val = client.http.cookies.get("twid", "") or ""
+            if "u%3D" in twid_val:
+                my_id = twid_val.split("u%3D")[-1]
+            elif "u=" in twid_val:
+                my_id = twid_val.split("u=")[-1]
+        except Exception:
+            pass
+        try:
+            settings_resp, _ = await client.v11.settings()
+            my_username = settings_resp.get("screen_name", "")
+        except Exception:
+            pass
+        print(f"Twitter client initialized for @{my_username or 'authenticated_user'} (ID: {my_id})")
     except Exception as e:
         print(f"Failed to initialize Twitter client: {e}")
         db_conn.close()
