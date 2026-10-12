@@ -317,9 +317,9 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
         if tweet_time:
             now_utc = datetime.now(timezone.utc)
             age = now_utc - tweet_time
-            if age > timedelta(hours=1):
+            if age > timedelta(hours=3):
                 age_mins = int(age.total_seconds() // 60)
-                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 60m limit)")
+                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 180m limit)")
                 continue
 
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
