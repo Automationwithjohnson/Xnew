@@ -162,35 +162,26 @@ def sanitize_ai_output(content: str) -> str:
             break
     # Remove quotes & backticks
     content = content.replace('"', '').replace('`', '').strip()
-    # Replace dashes/em-dashes/en-dashes with simple spaces/commas
-    content = content.replace('—', ', ').replace('–', ', ').replace('-', ' ')
-    # Strip disallowed punctuation: ! ? : ;
-    content = content.replace('!', '.').replace('?', '.').replace(':', ',').replace(';', ',')
-    content = re.sub(r'\.+', '.', content)
+    # Replace dashes/em-dashes/en-dashes with spaces or commas
+    content = content.replace('—', ', ').replace('–', ', ')
     content = re.sub(r'\s+', ' ', content).strip()
     return content
 
 def call_openrouter(x_post_text, article_context=""):
-    ai_limit = 200  # Enforce strict limit under 200 characters
-    
     context_str = f"\nAdditional Context: {article_context}" if article_context else ""
 
-    prompt = f"""You are a sharp, provocative, and contrarian commentator on X. Your goal is to write high-engagement comments that spark debate, stir strong emotions, and make people passionately agree or vigorously argue.
-
-Task:
-Analyze the X post payload below and write a short, punchy, provocative take directly under the post.
+    prompt = f"""You are an 18-year-old on X (Twitter) casually talking to your friend. You reply naturally with quick banter, dry humor, playful teasing, or relatable reactions.
 
 Rules:
-- High-Impact Contrarian Stance: Never give a bland summary or neutral observation. Call out blatant hypocrisy, point out the uncomfortable double standard, challenge the popular emotional narrative, or say the blunt truth people are avoiding.
-- Sarcastic or Cynical Edge: Use biting realism or sharp irony when appropriate. Expose human greed, media manipulation, political theater, or fake internet outrage.
-- Zero Cliches & Zero Preachiness: Do not lecture or sound like a moralist. Speak with cold, street-smart confidence.
-- Zero Self-Promotion: Never mention services, tools, or links. Never say 'DM me' or 'check my bio'. Focus 100% on dropping a viral take on the topic.
-- Length Constraint: The entire reply MUST be strictly under {ai_limit} characters. Keep it brief.
-- Simple English: Write in plain, clear, conversational English.
-- Punctuation Constraint: Do not use em dashes or en dashes anywhere. ONLY use standard commas (,) and periods (.). Do not use exclamation marks (!), question marks (?), colons (:), semicolons (;), or dashes (-) anywhere in your text. Do not ask any questions at the end of your reply.
-- Output Format: Output ONLY the exact reply text. No intros, no quotation marks, no thinking tags, and no labels.
+- Sound like a real 18-year-old texting a friend on X: effortless, casual, unbothered, funny.
+- Length: 4 to 15 words maximum. Keep it super short and punchy. Never write a paragraph or multiple sentences.
+- Emojis: Use 1 or 2 natural emojis that real people use on X (such as 💀, 😭, 👀, 🤣, 😭💀). Never use corporate or cringe emojis (no 🚀🔥💡).
+- For thirst traps or suggestive posts with clothes on: Never simp, never be vulgar, and never lecture or preach. Drop a funny tease or witty observation like a friend roasting them or playfully rolling their eyes.
+- For 1-line posts, random memes, or hot takes: Drop an instant funny reaction, deadpan roast, or relatable comment.
+- Zero AI Tells: Do NOT use formal language (like 'indeed', 'moreover', 'highlights', 'perhaps'). Write casually in simple conversational English.
+- Output ONLY the reply text, no quotes, no labels, and no explanations.
 
-Here is the X post payload:
+Here is the post:
 {x_post_text}{context_str}"""
 
     headers = {
@@ -316,13 +307,19 @@ async def process_tweet_list(client, db_conn, tweets, max_posts, test_mode, my_i
             print(f"Skipping tweet {target_tweet.id} (tweet already processed)")
             continue
 
+        # Skip tweets with virtually no text to avoid hallucinating without vision
+        clean_text_no_urls = re.sub(r'https?://[^\s]+', '', tweet_text).strip()
+        if len(clean_text_no_urls) < 3:
+            print(f"Skipping tweet {target_tweet.id} (no meaningful text/caption to react to)")
+            continue
+
         tweet_time = getattr(target_tweet, "created_at_datetime", None)
         if tweet_time:
             now_utc = datetime.now(timezone.utc)
             age = now_utc - tweet_time
-            if age > timedelta(minutes=25):
+            if age > timedelta(hours=1):
                 age_mins = int(age.total_seconds() // 60)
-                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 25m limit)")
+                print(f"Skipping tweet {target_tweet.id} (posted {age_mins}m ago > 60m limit)")
                 continue
 
         is_quote = hasattr(target_tweet, "quoted_status") and target_tweet.quoted_status
@@ -454,69 +451,28 @@ async def run_commenter_batch(test_mode=False, now_mode=False, max_posts=None):
     deduplicate_cookies(client)
     cleanup_old_records(db_conn)  # Purge tweet IDs older than 48h before each batch
 
-    # ── SOURCE 1: Following Timeline ────────────────────────────────────────
-    print("\n[SOURCE 1] Fetching from Following Timeline...")
-    following_tweets = []
+    # ── FYP Timeline (Home -> For You: https://x.com/home) ───────────────────
+    print("\n[FYP] Fetching from For You Timeline (https://x.com/home)...")
+    fyp_tweets = []
     try:
-        result = await client.get_latest_timeline(count=50)
+        result = await client.get_timeline(count=50)
         if result:
-            following_tweets = list(result)
-            print(f"Fetched {len(following_tweets)} tweets from Following Timeline.")
+            fyp_tweets = list(result)
+            print(f"Fetched {len(fyp_tweets)} tweets from FYP.")
     except Exception as e:
-        print(f"get_latest_timeline failed: {e}. Trying fallback...")
-        try:
-            result = await client.get_timeline(count=50)
-            if result:
-                following_tweets = list(result)
-        except Exception as e2:
-            print(f"Timeline fallback also failed: {e2}")
+        print(f"get_timeline failed: {e}")
 
-    following_count = 0
-    if following_tweets:
-        following_count = await process_tweet_list(
-            client, db_conn, following_tweets, per_source, test_mode, my_id, "FOLLOWING"
+    posted_count = 0
+    if fyp_tweets:
+        posted_count = await process_tweet_list(
+            client, db_conn, fyp_tweets, per_source, test_mode, my_id, "FYP"
         )
-        print(f"\n[SOURCE 1 DONE] Posted {following_count}/{per_source} comments from Following Timeline.")
+        print(f"\n[FYP DONE] Posted {posted_count}/{per_source} comments on FYP.")
     else:
-        print("[SOURCE 1] No tweets found on Following Timeline.")
-
-    # Skip buyer search in single test mode
-    if test_mode or max_posts == 1:
-        db_conn.close()
-        return
-
-    # ── SOURCE 2: High-Intent Buyer Buckets Rotation ────────────────────────
-    selected_buckets = random.sample(BUYER_ROTATION_BUCKETS, min(2, len(BUYER_ROTATION_BUCKETS)))
-    search_count = 0
-    for idx, bucket_query in enumerate(selected_buckets, 1):
-        print(f"\n[SOURCE 2 - BUCKET {idx}] Querying buyer intent: {bucket_query[:65]}...")
-        bucket_tweets = []
-        try:
-            # Query Top tweets first for high-authority discussions, fallback to Latest
-            result = await client.search_tweet(bucket_query, product="Top", count=25)
-            if result:
-                bucket_tweets = list(result)
-            if not bucket_tweets:
-                result = await client.search_tweet(bucket_query, product="Latest", count=25)
-                if result:
-                    bucket_tweets = list(result)
-            print(f"Fetched {len(bucket_tweets)} candidate tweets in bucket {idx}.")
-        except Exception as e:
-            print(f"Buyer search for bucket {idx} failed: {e}")
-
-        if bucket_tweets:
-            bucket_quota = max(1, per_source // len(selected_buckets))
-            count = await process_tweet_list(
-                client, db_conn, bucket_tweets, bucket_quota, test_mode, my_id, f"BUYER BUCKET {idx}"
-            )
-            search_count += count
-            print(f"[BUCKET {idx} DONE] Posted {count}/{bucket_quota} comments.")
-        else:
-            print(f"[BUCKET {idx}] No tweets found for query.")
+        print("[FYP] No tweets found on FYP Timeline.")
 
     print(f"\n{'='*50}")
-    print(f"BATCH COMPLETE: {following_count + search_count} total comments posted this run.")
-    print(f"  Following Timeline: {following_count}  |  Buyer Intent Searches: {search_count}")
+    print(f"BATCH COMPLETE: {posted_count} total comments posted this run on FYP.")
     print(f"{'='*50}")
     db_conn.close()
 
@@ -526,7 +482,7 @@ async def main():
     single_mode = "--single" in sys.argv or "--test" in sys.argv
     
     print("==================================================")
-    print("  X FOLLOWING TIMELINE AUTO LIKE & COMMENT BOT   ")
+    print("      X FOR YOU (FYP) AUTO COMMENT BOT           ")
     if single_mode:
         print("   MODE: SINGLE TEST (1 reply only, 0 delays)    ")
     elif now_mode:
@@ -537,14 +493,14 @@ async def main():
     
     if single_mode:
         try:
-            print("\nRunning single post test from Following timeline...")
+            print("\nRunning single post test on FYP...")
             await run_commenter_batch(test_mode=True, max_posts=1)
             print("\nSingle post test completed successfully!")
         except Exception as e:
             print(f"Error during test execution: {e}")
     elif now_mode:
         try:
-            print("\nRunning manual auto like & comment batch...")
+            print("\nRunning manual auto like & comment batch on FYP...")
             await run_commenter_batch(now_mode=True)
             print("\nManual batch run completed successfully!")
         except Exception as e:
@@ -552,7 +508,7 @@ async def main():
     else:
         while True:
             try:
-                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running Following timeline commenter batch...")
+                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Running FYP commenter batch...")
                 await run_commenter_batch()
             except Exception as e:
                 print(f"Error during execution batch: {e}")
